@@ -1,0 +1,21 @@
+{
+  "name": "Thoth - AI梦境档案库",
+  "short_name": "Thoth",
+  "description": "AI驱动的梦境记录与解析工具",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "https://ais-dev-ea7vlftarctynkiv7xeuth-749644888311.run.app/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://ais-dev-ea7vlftarctynkiv7xeuth-749644888311.run.app/logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

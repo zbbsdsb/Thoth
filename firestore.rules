@@ -1,0 +1,109 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // MVP Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Fields: email (string), created_at (timestamp), daily_usage_count (int), daily_quota_limit (int), last_usage_date (string)
+    //
+    // Collection: dreams
+    // Fields: user_id (string), audio_url (string), transcript (string), created_at (timestamp), duration (number)
+    //
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'created_at', 'daily_usage_count', 'daily_quota_limit']) &&
+             data.email is string && data.email.size() < 256 &&
+             data.created_at is timestamp &&
+             data.daily_usage_count is int &&
+             data.daily_usage_count >= 0 &&
+             data.daily_quota_limit is int &&
+             data.daily_quota_limit >= 0 &&
+             (!('last_usage_date' in data) || (data.last_usage_date is string && data.last_usage_date.size() == 10)) &&
+             (!('active_provider' in data) || (data.active_provider in ['gemini', 'openai', 'deepseek', 'minimax'])) &&
+             (!('external_apis' in data) || data.external_apis is map) &&
+             (!('streak' in data) || data.streak is int) &&
+             (!('last_streak_date' in data) || (data.last_streak_date is string && data.last_streak_date.size() == 10));
+    }
+
+    function isValidUserUpdate(current, next) {
+      return isValidUser(next) &&
+             next.email == current.email &&
+             next.created_at == current.created_at &&
+             next.daily_quota_limit == current.daily_quota_limit &&
+             (
+               // Case 1: Same day, increment count or update settings/streak
+               (next.last_usage_date == current.last_usage_date && 
+                (next.daily_usage_count == current.daily_usage_count || next.daily_usage_count == current.daily_usage_count + 1)) ||
+               // Case 2: New day, reset count to 1
+               (next.last_usage_date != current.last_usage_date && next.daily_usage_count == 1) ||
+               // Case 3: Just updating settings or streak
+               (next.daily_usage_count == current.daily_usage_count && next.last_usage_date == current.last_usage_date)
+             );
+    }
+
+    function isValidDream(data) {
+      return data.keys().hasAll(['user_id', 'audio_url', 'created_at']) &&
+             data.user_id == request.auth.uid &&
+             data.audio_url is string && data.audio_url.size() < 2048 &&
+             data.created_at is timestamp &&
+             (!('transcript' in data) || (data.transcript is string && data.transcript.size() < 10000)) &&
+             (!('duration' in data) || data.duration is number) &&
+             (!('location' in data) || (data.location is string && data.location.size() < 100));
+    }
+
+    function isValidGlobalImagery(data) {
+      return data.keys().hasAll(['tag', 'count', 'last_updated']) &&
+             data.tag is string && data.tag.size() < 100 &&
+             data.count is int &&
+             data.last_updated is timestamp;
+    }
+
+    function isValidGlobalLocation(data) {
+      return data.keys().hasAll(['country', 'count', 'last_updated']) &&
+             data.country is string && data.country.size() < 100 &&
+             data.count is int &&
+             data.last_updated is timestamp;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUserUpdate(resource.data, request.resource.data);
+    }
+
+    match /global_imagery/{tag} {
+      allow read: if true;
+      allow create, update: if isAuthenticated() && isValidGlobalImagery(request.resource.data);
+    }
+
+    match /global_locations/{country} {
+      allow read: if true;
+      allow create, update: if isAuthenticated() && isValidGlobalLocation(request.resource.data);
+    }
+
+    match /dreams/{dreamId} {
+      allow read: if isAuthenticated() && resource.data.user_id == request.auth.uid;
+      allow create: if isAuthenticated() && isValidDream(request.resource.data);
+      allow update: if isAuthenticated() && resource.data.user_id == request.auth.uid && isValidDream(request.resource.data);
+      allow delete: if isAuthenticated() && resource.data.user_id == request.auth.uid;
+    }
+
+    // Allow connectivity test
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

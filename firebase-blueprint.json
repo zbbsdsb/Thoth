@@ -1,0 +1,75 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with daily quota information",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "daily_usage_count": { "type": "integer", "description": "Number of times public quota was used today" },
+        "daily_quota_limit": { "type": "integer", "description": "Maximum allowed daily public quota usage" },
+        "last_usage_date": { "type": "string", "description": "The last date (YYYY-MM-DD) the user used their quota" },
+        "streak": { "type": "integer", "description": "Consecutive days of recording" },
+        "last_streak_date": { "type": "string", "description": "The last date (YYYY-MM-DD) a streak was updated" },
+        "active_provider": { "type": "string", "enum": ["gemini", "openai", "deepseek", "minimax"] },
+        "external_apis": { "type": "object" }
+      },
+      "required": ["email", "created_at", "daily_usage_count", "daily_quota_limit"]
+    },
+    "Dream": {
+      "title": "Dream",
+      "description": "MVP Dream record",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "audio_url": { "type": "string" },
+        "transcript": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "duration": { "type": "number" },
+        "location": { "type": "string", "description": "Country code or name" }
+      },
+      "required": ["user_id", "audio_url", "created_at"]
+    },
+    "GlobalLocation": {
+      "title": "GlobalLocation",
+      "description": "Aggregated dream counts per country",
+      "type": "object",
+      "properties": {
+        "country": { "type": "string" },
+        "count": { "type": "integer" },
+        "last_updated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["country", "count", "last_updated"]
+    },
+    "GlobalImagery": {
+      "title": "GlobalImagery",
+      "description": "Aggregated trending tags in the dreambase",
+      "type": "object",
+      "properties": {
+        "tag": { "type": "string" },
+        "count": { "type": "integer" },
+        "last_updated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tag", "count", "last_updated"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/dreams/{dreamId}": {
+      "schema": "Dream",
+      "description": "User dream records"
+    },
+    "/global_imagery/{tag}": {
+      "schema": "GlobalImagery",
+      "description": "Trending atomic information"
+    },
+    "/global_locations/{country}": {
+      "schema": "GlobalLocation",
+      "description": "Global dream distribution"
+    }
+  }
+}
