@@ -54,6 +54,7 @@ import { README_MD, QUOTA_MD, PRIVACY_MD } from './docs';
 import { toPng } from 'html-to-image';
 import download from 'downloadjs';
 import { motion, AnimatePresence } from 'motion/react';
+import { toast, Toaster } from 'sonner';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import * as d3 from 'd3';
@@ -98,6 +99,7 @@ interface Dream {
   created_at: any;
   duration?: number;
   tags?: string[];
+  insight?: string;
 }
 
 interface ExternalApi {
@@ -239,7 +241,7 @@ const DreamDetailModal = ({ dream, onClose, onDelete }: { dream: Dream, onClose:
             </div>
 
             {dream.tags && dream.tags.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-12">
+              <div className="flex flex-wrap gap-2 mb-8">
                 {dream.tags.map((tag, i) => (
                   <span 
                     key={i}
@@ -248,6 +250,18 @@ const DreamDetailModal = ({ dream, onClose, onDelete }: { dream: Dream, onClose:
                     #{tag}
                   </span>
                 ))}
+              </div>
+            )}
+
+            {dream.insight && (
+              <div className="mb-12 p-6 bg-zinc-800/30 border border-zinc-800/50 rounded-3xl">
+                <div className="flex items-center gap-3 mb-3 text-zinc-500">
+                  <Sparkles className="w-3 h-3" />
+                  <span className="text-[9px] font-mono uppercase tracking-[0.2em]">Subconscious Insight</span>
+                </div>
+                <p className="text-zinc-300 text-sm leading-relaxed font-serif italic">
+                  {dream.insight}
+                </p>
               </div>
             )}
 
@@ -402,35 +416,37 @@ const SettingsContent = ({
           </button>
         </div>
 
-        <div className="pt-8 border-t border-zinc-800">
-          <p className="text-[10px] uppercase tracking-[0.3em] font-bold text-zinc-600 mb-6">Account & API</p>
-          <button 
-            onClick={onSelectKey}
-            className={cn(
-              "w-full px-5 py-4 rounded-2xl text-[10px] font-bold uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 border",
-              hasUserKey 
-                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500" 
-                : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
-            )}
-          >
-            <Sparkles className="w-4 h-4" />
-            {hasUserKey ? "Personal Key Active" : "Configure API Key"}
-          </button>
-          {!hasUserKey && profile && (
-            <div className="mt-4 p-4 bg-zinc-950/50 rounded-xl border border-zinc-800/50">
-              <p className="text-[8px] uppercase tracking-widest text-zinc-600 mb-1">Daily Usage</p>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-zinc-400">{profile.daily_usage_count}/{profile.daily_quota_limit}</span>
-                <div className="flex-1 h-1 bg-zinc-800 rounded-full mx-3 overflow-hidden">
-                  <div 
-                    className="h-full bg-zinc-100 transition-all duration-500" 
-                    style={{ width: `${(profile.daily_usage_count / profile.daily_quota_limit) * 100}%` }}
-                  />
+        {window.aistudio && (
+          <div className="pt-8 border-t border-zinc-800">
+            <p className="text-[10px] uppercase tracking-[0.3em] font-bold text-zinc-600 mb-6">Account & API</p>
+            <button 
+              onClick={onSelectKey}
+              className={cn(
+                "w-full px-5 py-4 rounded-2xl text-[10px] font-bold uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 border",
+                hasUserKey 
+                  ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500" 
+                  : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
+              )}
+            >
+              <Sparkles className="w-4 h-4" />
+              {hasUserKey ? "Personal Key Active" : "Configure API Key"}
+            </button>
+            {!hasUserKey && profile && (
+              <div className="mt-4 p-4 bg-zinc-950/50 rounded-xl border border-zinc-800/50">
+                <p className="text-[8px] uppercase tracking-widest text-zinc-600 mb-1">Daily Usage</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono text-zinc-400">{profile.daily_usage_count}/{profile.daily_quota_limit}</span>
+                  <div className="flex-1 h-1 bg-zinc-800 rounded-full mx-3 overflow-hidden">
+                    <div 
+                      className="h-full bg-zinc-100 transition-all duration-500" 
+                      style={{ width: `${(profile.daily_usage_count / profile.daily_quota_limit) * 100}%` }}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Main Content */}
@@ -705,6 +721,97 @@ const DreamWorldMap = ({ locations }: { locations: any[] }) => {
   );
 };
 
+// --- Components ---
+
+const SubconsciousParticles = () => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animationFrameId: number;
+    let particles: Array<{
+      x: number;
+      y: number;
+      size: number;
+      speedX: number;
+      speedY: number;
+      opacity: number;
+    }> = [];
+
+    const resize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+
+    const createParticles = () => {
+      particles = [];
+      const count = Math.floor((canvas.width * canvas.height) / 25000);
+      for (let i = 0; i < count; i++) {
+        particles.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          size: Math.random() * 1.5 + 0.5,
+          speedX: (Math.random() - 0.5) * 0.15,
+          speedY: (Math.random() - 0.5) * 0.15,
+          opacity: Math.random() * 0.3 + 0.1,
+        });
+      }
+    };
+
+    const animate = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+
+      particles.forEach((p) => {
+        p.x += p.speedX;
+        p.y += p.speedY;
+
+        if (p.x < 0) p.x = canvas.width;
+        if (p.x > canvas.width) p.x = 0;
+        if (p.y < 0) p.y = canvas.height;
+        if (p.y > canvas.height) p.y = 0;
+
+        ctx.globalAlpha = p.opacity;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    window.addEventListener('resize', resize);
+    resize();
+    createParticles();
+    animate();
+
+    return () => {
+      window.removeEventListener('resize', resize);
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, []);
+
+  return (
+    <canvas 
+      ref={canvasRef} 
+      className="fixed inset-0 pointer-events-none z-0 opacity-30"
+    />
+  );
+};
+
+const GoogleIcon = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" className={className}>
+    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+  </svg>
+);
+
 const ThothLogo = ({ className = "w-20 h-20" }: { className?: string }) => (
   <svg viewBox="0 0 100 100" className={className} xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -865,7 +972,7 @@ export default function App() {
         return;
       }
       console.error("Sign-in error:", err);
-      setError("Failed to sign in. Please try again.");
+      toast.error("Failed to sign in. Please try again.");
     }
   };
 
@@ -894,13 +1001,14 @@ export default function App() {
       await updateDoc(doc(db, 'users', user.uid), updates);
     } catch (err) {
       console.error("Update profile error:", err);
-      setError("Failed to update settings.");
+      toast.error("Failed to update settings.");
     }
   };
 
   const getAiInstance = () => {
     // Prioritize user-selected key (process.env.API_KEY) over developer key
-    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+    // In Vercel, GEMINI_API_KEY is provided via vite.config.ts define
+    const apiKey = (typeof process !== 'undefined' && process.env?.API_KEY) || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error("No API Key configured. Please check your environment or select your own key.");
     }
@@ -914,9 +1022,16 @@ export default function App() {
       const ai = getAiInstance();
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Extract 3-5 short, evocative keywords or subconscious symbols from this dream transcript. Return them as a simple comma-separated list. Transcript: ${text}`,
+        contents: `You are a world-class dream analyst. Analyze this dream transcript. First, extract 3-5 short, evocative keywords or subconscious symbols. Then, provide a one-sentence psychological insight into the dreamer's subconscious. Format: Keywords: [list], Insight: [sentence]. Transcript: ${text}`,
       });
-      return response.text?.split(',').map(t => t.trim()) || [];
+      const content = response.text || "";
+      const keywordsMatch = content.match(/Keywords:\s*(.*)/i);
+      const insightMatch = content.match(/Insight:\s*(.*)/i);
+      
+      const tags = keywordsMatch ? keywordsMatch[1].split(',').map(t => t.trim()) : [];
+      const insight = insightMatch ? insightMatch[1].trim() : "Subconscious patterns detected.";
+      
+      return { tags, insight };
     }
 
     const config = profile?.external_apis?.[provider];
@@ -947,7 +1062,7 @@ export default function App() {
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: 'You are a dream analyst. Extract 3-5 short, evocative keywords or subconscious symbols from the dream transcript. Return them as a simple comma-separated list.' },
+          { role: 'system', content: 'You are a world-class dream analyst. Extract 3-5 short, evocative keywords or subconscious symbols. Then, provide a one-sentence psychological insight. Format: Keywords: [list], Insight: [sentence].' },
           { role: 'user', content: text }
         ]
       })
@@ -960,7 +1075,13 @@ export default function App() {
 
     const data = await response.json();
     const content = data.choices[0].message.content;
-    return content.split(',').map((t: string) => t.trim()) || [];
+    const keywordsMatch = content.match(/Keywords:\s*(.*)/i);
+    const insightMatch = content.match(/Insight:\s*(.*)/i);
+    
+    const tags = keywordsMatch ? keywordsMatch[1].split(',').map((t: string) => t.trim()) : [];
+    const insight = insightMatch ? insightMatch[1].trim() : "Subconscious patterns detected.";
+    
+    return { tags, insight };
   };
 
   // --- Fetch Global Imagery ---
@@ -1046,7 +1167,7 @@ export default function App() {
                 console.log(`Retrying connection test... (${retries} left)`);
                 setTimeout(() => testConnection(retries - 1), 2000);
               } else {
-                setError("Firebase connection failed. This usually means the database is still initializing. Please wait 1-2 minutes and refresh.");
+                toast.error("Firebase connection failed. This usually means the database is still initializing. Please wait 1-2 minutes and refresh.");
               }
             } else if (err instanceof Error && (err.message.includes('permission-denied') || err.message.includes('Missing or insufficient permissions'))) {
               // This is actually a good sign - it means we reached the server!
@@ -1054,7 +1175,7 @@ export default function App() {
               setError(null);
             } else {
               // Show actual error for debugging
-              setError(`Firebase Error: ${err instanceof Error ? err.message : String(err)}`);
+              toast.error(`Firebase Error: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
         };
@@ -1140,7 +1261,7 @@ export default function App() {
       setError(null);
     } catch (err) {
       console.error("Recording error:", err);
-      setError("Microphone access denied or not supported.");
+      toast.error("Microphone access denied or not supported.");
     }
   };
 
@@ -1163,7 +1284,7 @@ export default function App() {
     const currentUsage = isNewDay ? 0 : profile.daily_usage_count;
 
     if (isUsingPublicQuota && currentUsage >= profile.daily_quota_limit) {
-      setError("You have reached your daily public quota limit (3 dreams). Please select your own API key to continue recording.");
+    toast.error("You have reached your daily public quota limit (3 dreams). Please select your own API key to continue recording.");
       setTranscribing(false);
       return;
     }
@@ -1204,7 +1325,7 @@ export default function App() {
       });
 
       const transcript = response.text || "No transcription available.";
-      const tags = await analyzeDream(transcript);
+      const { tags, insight } = await analyzeDream(transcript);
       
       // 3. Save to Firestore
       await addDoc(collection(db, 'dreams'), {
@@ -1212,9 +1333,11 @@ export default function App() {
         transcript,
         audio_url: audioUrl,
         tags,
+        insight,
         location: userCountry || "Unknown",
         created_at: serverTimestamp(),
       });
+      toast.success("Dream archived successfully.");
 
       // 4. Update Global Imagery, Streak & Location
       await updateGlobalImagery(tags);
@@ -1241,7 +1364,7 @@ export default function App() {
 
     } catch (err) {
       console.error(err);
-      setError("Failed to process dream. Please try again.");
+      toast.error("Failed to process dream. Please try again.");
     } finally {
       setTranscribing(false);
     }
@@ -1303,7 +1426,7 @@ export default function App() {
     const currentUsage = isNewDay ? 0 : profile.daily_usage_count;
 
     if (isUsingPublicQuota && currentUsage >= profile.daily_quota_limit) {
-      setError("You have reached your daily public quota limit (3 dreams). Please select your own API key to continue recording.");
+      toast.error("You have reached your daily public quota limit (3 dreams). Please select your own API key to continue recording.");
       return;
     }
 
@@ -1311,15 +1434,17 @@ export default function App() {
     setError(null);
 
     try {
-      const tags = await analyzeDream(manualText);
+      const { tags, insight } = await analyzeDream(manualText);
 
       await addDoc(collection(db, 'dreams'), {
         user_id: user.uid,
         transcript: manualText,
         tags,
+        insight,
         location: userCountry || "Unknown",
         created_at: serverTimestamp(),
       });
+      toast.success("Dream archived successfully.");
 
       // Update Global Imagery, Streak & Location
       await updateGlobalImagery(tags);
@@ -1348,7 +1473,7 @@ export default function App() {
       setEntryMode('voice');
     } catch (err) {
       console.error(err);
-      setError("Failed to save dream.");
+      toast.error("Failed to save dream.");
     } finally {
       setTranscribing(false);
     }
@@ -1365,7 +1490,7 @@ export default function App() {
       setSelectedDream(null);
     } catch (err) {
       console.error("Delete error:", err);
-      setError("Failed to delete dream.");
+      toast.error("Failed to delete dream.");
     }
   };
 
@@ -1380,33 +1505,70 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-6">
+      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+        <div className="atmosphere opacity-80" />
+        
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
-          className="text-center max-w-sm"
+          transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
+          className="glass-card w-full max-w-md p-10 sm:p-16 text-center relative z-10"
         >
-          <div className="w-24 h-24 flex items-center justify-center mx-auto mb-8">
-            <ThothLogo className="w-full h-full" />
-          </div>
-          <h1 className="text-4xl font-bold text-zinc-100 mb-4 tracking-tight">Thoth</h1>
-          <p className="text-zinc-400 mb-10 leading-relaxed">
-            The archive of human subconscious. Record your dreams before they fade.
-          </p>
+          <motion.div 
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.3, duration: 0.8 }}
+            className="w-20 h-20 flex items-center justify-center mx-auto mb-10"
+          >
+            <ThothLogo className="w-full h-full text-white" />
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5, duration: 0.8 }}
+          >
+            <h1 className="text-5xl font-serif italic text-zinc-100 mb-2 tracking-tight">Thoth</h1>
+            <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-[0.4em] mb-10">
+              Archive your subconscious
+            </p>
+            
+            <p className="text-zinc-400 text-sm leading-relaxed mb-12 max-w-xs mx-auto">
+              A private, AI-powered vault for your dreams. Record, transcribe, and analyze the patterns of your mind.
+            </p>
+          </motion.div>
           
           {error && (
-            <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-500 text-xs">
+            <motion.div 
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="mb-8 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-500 text-[10px] font-mono uppercase tracking-wider"
+            >
               {error}
-            </div>
+            </motion.div>
           )}
 
-          <button 
+          <motion.button 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.8, duration: 0.8 }}
+            whileHover={{ scale: 1.02, backgroundColor: 'rgba(255,255,255,1)' }}
+            whileTap={{ scale: 0.98 }}
             onClick={handleSignIn}
-            className="w-full py-4 bg-zinc-100 text-zinc-950 rounded-2xl font-semibold hover:bg-zinc-200 transition-all flex items-center justify-center gap-3 shadow-lg shadow-white/5"
+            className="w-full py-5 bg-white text-zinc-950 rounded-full font-bold transition-all flex items-center justify-center gap-3 shadow-2xl shadow-white/10"
           >
-            <Sparkles className="w-5 h-5" />
+            <GoogleIcon className="w-5 h-5" />
             Sign in with Google
-          </button>
+          </motion.button>
+
+          <motion.p 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.4 }}
+            transition={{ delay: 1.2, duration: 1 }}
+            className="mt-10 text-[9px] font-mono text-zinc-500 uppercase tracking-widest"
+          >
+            Secure & Private Archive
+          </motion.p>
         </motion.div>
       </div>
     );
@@ -1414,7 +1576,10 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-zinc-100 selection:text-zinc-950 flex flex-col md:flex-row">
+      <Toaster position="top-center" expand={false} richColors theme="dark" />
+      <div className="atmosphere" />
+      <SubconsciousParticles />
+      <div className="min-h-screen text-zinc-100 font-sans selection:bg-zinc-100 selection:text-zinc-950 flex flex-col md:flex-row relative z-10">
         <Navigation 
           currentView={currentView} 
           setCurrentView={setCurrentView} 
@@ -1429,18 +1594,20 @@ export default function App() {
               <span className="font-bold text-lg tracking-tight">Thoth</span>
             </div>
             <div className="flex items-center gap-3">
-              <button 
-                onClick={handleSelectKey}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1 rounded-full border transition-all text-[9px] font-mono uppercase tracking-widest",
-                  hasUserKey 
-                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500" 
-                    : "bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-zinc-300"
-                )}
-              >
-                <Sparkles className="w-3 h-3" />
-                {hasUserKey ? "Personal" : "Quota"}
-              </button>
+              {window.aistudio && (
+                <button 
+                  onClick={handleSelectKey}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1 rounded-full border transition-all text-[9px] font-mono uppercase tracking-widest",
+                    hasUserKey 
+                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500" 
+                      : "bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-zinc-300"
+                  )}
+                >
+                  <Sparkles className="w-3 h-3" />
+                  {hasUserKey ? "Personal" : "Quota"}
+                </button>
+              )}
             </div>
           </header>
 
@@ -1471,13 +1638,15 @@ export default function App() {
                   </div>
 
                   {/* Hero / Record Section */}
-                  <section className="text-center py-12">
-                    <div className="flex justify-center gap-4 mb-12">
+                  <section className="text-center py-12 relative">
+                    <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-96 h-96 bg-dream-accent/5 blur-[120px] rounded-full pointer-events-none" />
+                    
+                    <div className="flex justify-center gap-4 mb-16 relative z-10">
                       <button 
                         onClick={() => setEntryMode('voice')}
                         className={cn(
-                          "text-[10px] uppercase tracking-[0.2em] font-bold px-6 py-2 rounded-full border transition-all",
-                          entryMode === 'voice' ? "bg-zinc-100 text-zinc-950 border-zinc-100" : "text-zinc-500 border-zinc-900 hover:border-zinc-800"
+                          "text-[10px] uppercase tracking-[0.3em] font-bold px-8 py-3 rounded-full border transition-all backdrop-blur-md",
+                          entryMode === 'voice' ? "bg-white/10 text-white border-white/20 shadow-xl shadow-white/5" : "text-zinc-500 border-white/5 hover:border-white/10"
                         )}
                       >
                         Voice
@@ -1485,8 +1654,8 @@ export default function App() {
                       <button 
                         onClick={() => setEntryMode('text')}
                         className={cn(
-                          "text-[10px] uppercase tracking-[0.2em] font-bold px-6 py-2 rounded-full border transition-all",
-                          entryMode === 'text' ? "bg-zinc-100 text-zinc-950 border-zinc-100" : "text-zinc-500 border-zinc-900 hover:border-zinc-800"
+                          "text-[10px] uppercase tracking-[0.3em] font-bold px-8 py-3 rounded-full border transition-all backdrop-blur-md",
+                          entryMode === 'text' ? "bg-white/10 text-white border-white/20 shadow-xl shadow-white/5" : "text-zinc-500 border-white/5 hover:border-white/10"
                         )}
                       >
                         Text
@@ -1498,20 +1667,20 @@ export default function App() {
                         !isRecording && !transcribing ? (
                           <motion.div
                             key="idle"
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.9 }}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
                           >
-                            <h2 className="text-4xl font-light mb-12 text-zinc-400 tracking-tight leading-tight">
+                            <h2 className="text-6xl font-light dream-text-gradient tracking-tighter mb-16 leading-tight">
                               Just woke up? <br />
-                              <span className="text-zinc-100 font-medium">Capture the dream.</span>
+                              <span className="italic font-serif">Capture the dream.</span>
                             </h2>
                             <button 
                               onClick={startRecording}
-                              className="group relative w-40 h-40 bg-zinc-900 rounded-full mx-auto flex items-center justify-center border border-zinc-800 hover:border-zinc-700 transition-all shadow-2xl shadow-zinc-950"
+                              className="group relative w-48 h-48 glass-card mx-auto flex items-center justify-center hover:scale-105 transition-all duration-500 active:scale-95"
                             >
-                              <div className="absolute inset-0 bg-zinc-100/5 rounded-full scale-0 group-hover:scale-100 transition-transform duration-500" />
-                              <Mic className="w-12 h-12 text-zinc-100" />
+                              <div className="absolute inset-0 bg-white/5 rounded-full scale-0 group-hover:scale-100 transition-transform duration-700 blur-xl" />
+                              <Mic className="w-14 h-14 text-white/80 group-hover:text-white transition-colors" />
                             </button>
                           </motion.div>
                         ) : isRecording ? (
@@ -1522,20 +1691,20 @@ export default function App() {
                             exit={{ opacity: 0 }}
                             className="flex flex-col items-center"
                           >
-                            <div className="w-40 h-40 bg-red-500/5 rounded-full flex items-center justify-center border border-red-500/20 mb-8 relative">
+                            <div className="w-48 h-48 bg-red-500/5 rounded-full flex items-center justify-center border border-red-500/20 mb-12 relative">
                               <motion.div 
-                                animate={{ scale: [1, 1.15, 1] }}
+                                animate={{ scale: [1, 1.2, 1], opacity: [0.1, 0.3, 0.1] }}
                                 transition={{ repeat: Infinity, duration: 2 }}
-                                className="absolute inset-0 bg-red-500/5 rounded-full"
+                                className="absolute inset-0 bg-red-500 rounded-full blur-2xl"
                               />
                               <button 
                                 onClick={stopRecording}
-                                className="w-20 h-20 bg-red-500 rounded-full flex items-center justify-center hover:scale-95 transition-transform"
+                                className="w-24 h-24 bg-red-500 rounded-full flex items-center justify-center hover:scale-95 transition-transform shadow-2xl shadow-red-500/20 relative z-10"
                               >
                                 <Square className="w-8 h-8 text-white fill-white" />
                               </button>
                             </div>
-                            <p className="text-red-500 font-mono text-xs uppercase tracking-[0.3em] animate-pulse">Recording Subconscious</p>
+                            <p className="text-red-500 font-mono text-[10px] uppercase tracking-[0.5em] animate-pulse">Recording Subconscious</p>
                           </motion.div>
                         ) : (
                           <motion.div
@@ -1545,33 +1714,44 @@ export default function App() {
                             exit={{ opacity: 0 }}
                             className="flex flex-col items-center"
                           >
-                            <div className="w-40 h-40 bg-zinc-900 rounded-full flex items-center justify-center border border-zinc-800 mb-8">
-                              <Loader2 className="w-12 h-12 text-zinc-500 animate-spin" />
+                            <div className="w-48 h-48 glass-card flex items-center justify-center mb-12 relative overflow-hidden">
+                              <motion.div 
+                                animate={{ 
+                                  rotate: 360,
+                                  scale: [1, 1.1, 1]
+                                }}
+                                transition={{ 
+                                  rotate: { repeat: Infinity, duration: 10, ease: "linear" },
+                                  scale: { repeat: Infinity, duration: 3 }
+                                }}
+                                className="absolute inset-0 bg-gradient-to-tr from-dream-accent/20 via-transparent to-white/10"
+                              />
+                              <Loader2 className="w-14 h-14 text-zinc-400 animate-spin relative z-10" />
                             </div>
-                            <p className="text-zinc-500 font-mono text-xs uppercase tracking-[0.3em]">Archiving to Base</p>
+                            <p className="text-zinc-500 font-mono text-[10px] uppercase tracking-[0.5em]">Crystallizing Atoms</p>
                           </motion.div>
                         )
                       ) : (
                         <motion.div
                           key="text-entry"
-                          initial={{ opacity: 0, y: 10 }}
+                          initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: 10 }}
-                          className="w-full"
+                          exit={{ opacity: 0, y: -20 }}
+                          className="w-full max-w-3xl mx-auto"
                         >
                           <textarea 
                             value={manualText}
                             onChange={(e) => setManualText(e.target.value)}
-                            placeholder="Type your dream here..."
-                            className="w-full h-48 bg-zinc-900/50 border border-zinc-800 rounded-[2rem] p-8 text-zinc-100 placeholder:text-zinc-700 focus:outline-none focus:border-zinc-700 transition-all resize-none mb-6 text-lg leading-relaxed"
+                            placeholder="Describe the dreamscape..."
+                            className="w-full h-64 glass-card p-10 text-zinc-100 placeholder:text-zinc-700 focus:outline-none focus:border-white/20 transition-all resize-none mb-8 text-xl font-serif italic leading-relaxed"
                           />
                           <button 
                             onClick={handleManualSave}
                             disabled={!manualText.trim() || transcribing}
-                            className="w-full py-5 bg-zinc-100 text-zinc-950 rounded-2xl font-bold uppercase tracking-widest text-xs hover:bg-zinc-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+                            className="w-full py-6 bg-white text-zinc-950 rounded-3xl font-bold uppercase tracking-[0.2em] text-[10px] hover:bg-zinc-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-4 shadow-2xl shadow-white/10"
                           >
                             {transcribing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                            {transcribing ? "Analyzing..." : "Save to Archive"}
+                            {transcribing ? "Crystallizing..." : "Archive Subconscious"}
                           </button>
                         </motion.div>
                       )}
@@ -1593,89 +1773,106 @@ export default function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
-                  className="space-y-16"
+                  className="space-y-24"
                 >
-                  {/* Imagery Hall (意象大厅) */}
-                  <div>
-                    <div className="flex items-center justify-between mb-8">
+                  {/* Imagery Hall */}
+                  <div className="relative">
+                    <div className="absolute -top-24 -left-24 w-64 h-64 bg-dream-accent/10 blur-[100px] rounded-full pointer-events-none" />
+                    
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
                       <div>
-                        <h2 className="text-2xl font-bold text-zinc-100 tracking-tight">Imagery Hall</h2>
-                        <p className="text-xs text-zinc-500 font-mono uppercase tracking-widest">Trending atomic information in the dreambase</p>
+                        <h2 className="text-5xl font-light dream-text-gradient tracking-tighter mb-4">Imagery Hall</h2>
+                        <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-[0.4em]">The collective subconscious crystallized</p>
                       </div>
-                      <div className="flex items-center gap-2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full">
-                        <Globe className="w-3 h-3 text-zinc-500" />
-                        <span className="text-[10px] text-zinc-500 font-mono uppercase">Global</span>
+                      <div className="flex items-center gap-3 px-4 py-2 bg-white/5 border border-white/10 rounded-full backdrop-blur-md">
+                        <Globe className="w-3 h-3 text-zinc-400" />
+                        <span className="text-[9px] text-zinc-400 font-mono uppercase tracking-widest">Global Dreambase</span>
                       </div>
                     </div>
                     
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-6">
                       {globalImagery.length > 0 ? (
                         globalImagery.map((item, idx) => (
                           <motion.div
                             key={item.id}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: idx * 0.05 }}
-                            className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl flex flex-col items-center justify-center text-center group hover:border-zinc-700 transition-all"
+                            initial={{ opacity: 0, scale: 0.8 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ 
+                              delay: idx * 0.05,
+                              type: "spring",
+                              stiffness: 100
+                            }}
+                            whileHover={{ y: -8, scale: 1.05 }}
+                            className="glass-card p-8 flex flex-col items-center justify-center text-center group relative overflow-hidden"
                           >
-                            <span className="text-xs font-bold text-zinc-200 mb-1 group-hover:text-white transition-colors">#{item.tag}</span>
-                            <span className="text-[10px] font-mono text-zinc-600">{item.count} hits</span>
+                            <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <span className="text-sm font-serif italic text-zinc-100 mb-2 group-hover:text-dream-accent transition-colors">
+                              {item.tag}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <div className="w-1 h-1 bg-zinc-700 rounded-full" />
+                              <span className="text-[9px] font-mono text-zinc-600 uppercase tracking-widest">{item.count}</span>
+                            </div>
                           </motion.div>
                         ))
                       ) : (
-                        <div className="col-span-full py-8 text-center border border-dashed border-zinc-800 rounded-3xl">
-                          <p className="text-xs text-zinc-600 font-mono uppercase tracking-widest">The hall is currently silent...</p>
+                        <div className="col-span-full py-24 text-center glass-card border-dashed">
+                          <p className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.3em]">The hall is currently silent...</p>
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Dream Map (梦境地图) */}
-                  <div>
-                    <div className="flex items-center justify-between mb-8">
+                  {/* Dream Map */}
+                  <div className="relative">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
                       <div>
-                        <h2 className="text-2xl font-bold text-zinc-100 tracking-tight">Dream Map</h2>
-                        <p className="text-xs text-zinc-500 font-mono uppercase tracking-widest">Global subconscious pulse by country</p>
+                        <h2 className="text-5xl font-light dream-text-gradient tracking-tighter mb-4">Dream Map</h2>
+                        <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-[0.4em]">Subconscious pulse by geography</p>
                       </div>
-                      <div className="flex items-center gap-2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full">
-                        <MapIcon className="w-3 h-3 text-zinc-500" />
-                        <span className="text-[10px] text-zinc-500 font-mono uppercase">Live</span>
+                      <div className="flex items-center gap-3 px-4 py-2 bg-white/5 border border-white/10 rounded-full backdrop-blur-md">
+                        <MapIcon className="w-3 h-3 text-zinc-400" />
+                        <span className="text-[9px] text-zinc-400 font-mono uppercase tracking-widest">Live Pulse</span>
                       </div>
                     </div>
                     
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] p-8 space-y-8">
+                    <div className="glass-card p-12 space-y-12">
                       <DreamWorldMap locations={globalLocations} />
                       
                       {globalLocations.length > 0 ? (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-16 gap-y-8">
                           {globalLocations.map((loc, idx) => (
-                            <div key={loc.id} className="flex items-center gap-4">
-                              <span className="text-[10px] font-mono text-zinc-700 w-6">{idx + 1}.</span>
-                              <div className="flex-1">
-                                <div className="flex justify-between mb-2">
-                                  <span className="text-xs font-bold text-zinc-300 uppercase tracking-widest">{loc.country}</span>
-                                  <span className="text-[10px] font-mono text-zinc-500">{loc.count} units</span>
+                            <div key={loc.id} className="group">
+                              <div className="flex justify-between items-end mb-3">
+                                <div className="flex items-center gap-3">
+                                  <span className="text-[10px] font-mono text-zinc-700">{String(idx + 1).padStart(2, '0')}</span>
+                                  <span className="text-xs font-bold text-zinc-300 uppercase tracking-[0.2em] group-hover:text-white transition-colors">{loc.country}</span>
                                 </div>
-                                <div className="h-1 bg-zinc-950 rounded-full overflow-hidden">
-                                  <motion.div 
-                                    initial={{ width: 0 }}
-                                    animate={{ width: `${(loc.count / globalLocations[0].count) * 100}%` }}
-                                    className="h-full bg-zinc-100"
-                                  />
-                                </div>
+                                <span className="text-[10px] font-mono text-zinc-500">{loc.count} atoms</span>
+                              </div>
+                              <div className="h-[2px] bg-white/5 rounded-full overflow-hidden">
+                                <motion.div 
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${(loc.count / globalLocations[0].count) * 100}%` }}
+                                  className="h-full bg-gradient-to-r from-zinc-500 to-white"
+                                />
                               </div>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div className="py-8 text-center border border-dashed border-zinc-800 rounded-3xl">
-                          <p className="text-xs text-zinc-600 font-mono uppercase tracking-widest">The map is currently dark...</p>
+                        <div className="py-24 text-center glass-card border-dashed">
+                          <p className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.3em]">The map is currently dark...</p>
                         </div>
                       )}
+                      
                       {userCountry && (
-                        <div className="mt-8 pt-8 border-t border-zinc-800 flex items-center justify-between">
-                          <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-widest">Your Location</span>
-                          <span className="text-xs font-bold text-emerald-500 uppercase tracking-widest">{userCountry}</span>
+                        <div className="mt-12 pt-12 border-t border-white/5 flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                            <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest">Your Current Node</span>
+                          </div>
+                          <span className="text-xs font-bold text-emerald-500 uppercase tracking-[0.2em]">{userCountry}</span>
                         </div>
                       )}
                     </div>
@@ -1690,28 +1887,28 @@ export default function App() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-12">
-                    <div className="flex items-center gap-3 text-zinc-600">
-                      <History className="w-4 h-4" />
-                      <h3 className="text-[10px] uppercase tracking-[0.3em] font-bold">Timeline</h3>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-16">
+                    <div className="flex items-center gap-4 text-zinc-500">
+                      <History className="w-5 h-5" />
+                      <h3 className="text-[10px] uppercase tracking-[0.4em] font-bold">Timeline</h3>
                     </div>
                     
                     <div className="relative flex-1 max-w-xs">
-                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-700" />
+                      <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-600" />
                       <input 
                         type="text"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search archive..."
-                        className="w-full bg-zinc-900/50 border border-zinc-900 rounded-full py-2 pl-10 pr-4 text-[10px] font-mono text-zinc-400 placeholder:text-zinc-700 focus:outline-none focus:border-zinc-800 transition-all"
+                        placeholder="Search subconscious..."
+                        className="w-full glass-card rounded-full py-3 pl-12 pr-6 text-[11px] font-mono text-zinc-400 placeholder:text-zinc-700 focus:outline-none focus:border-white/20 transition-all"
                       />
                     </div>
                   </div>
 
-                  <div className="space-y-12">
+                  <div className="space-y-16">
                     {filteredDreams.length === 0 ? (
-                      <div className="py-24 text-center border border-dashed border-zinc-900 rounded-[2.5rem]">
-                        <p className="text-zinc-700 font-mono text-xs uppercase tracking-widest">
+                      <div className="py-32 text-center glass-card rounded-[3rem] border-dashed">
+                        <p className="text-zinc-700 font-mono text-[10px] uppercase tracking-[0.5em]">
                           {searchQuery ? "No matches found" : "Archive Empty"}
                         </p>
                       </div>
@@ -1723,19 +1920,19 @@ export default function App() {
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
                           onClick={() => setSelectedDream(dream)}
-                          className="relative pl-8 border-l border-zinc-900 group cursor-pointer"
+                          className="relative pl-12 border-l border-white/5 group cursor-pointer"
                         >
-                          <div className="absolute -left-[5px] top-0 w-2 h-2 bg-zinc-800 rounded-full group-hover:bg-zinc-100 transition-colors" />
+                          <div className="absolute -left-[5px] top-0 w-2.5 h-2.5 bg-zinc-800 rounded-full group-hover:bg-white transition-all duration-500 group-hover:scale-125 group-hover:shadow-[0_0_15px_rgba(255,255,255,0.5)]" />
                           
-                          <header className="flex items-center gap-4 mb-4">
-                            <time className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
+                          <header className="flex items-center gap-6 mb-6">
+                            <time className="text-[10px] font-mono text-zinc-500 uppercase tracking-[0.4em]">
                               {dream.created_at?.toDate().toLocaleDateString('en-US', { 
                                 month: 'short', 
                                 day: 'numeric', 
                                 year: 'numeric'
                               })}
                             </time>
-                            <span className="text-[10px] font-mono text-zinc-800 tracking-tighter">
+                            <span className="text-[10px] font-mono text-zinc-700 tracking-tighter">
                               {dream.created_at?.toDate().toLocaleTimeString('en-US', { 
                                 hour: '2-digit',
                                 minute: '2-digit',
@@ -1743,14 +1940,23 @@ export default function App() {
                               })}
                             </span>
                             {dream.audio_url && (
-                              <Volume2 className="w-3 h-3 text-zinc-700 group-hover:text-zinc-400 transition-colors" />
+                              <Volume2 className="w-4 h-4 text-zinc-700 group-hover:text-zinc-400 transition-colors" />
                             )}
+                            <div className="h-px flex-1 bg-white/5" />
                           </header>
-                          
-                          <div className="bg-zinc-900/30 border border-zinc-900/50 p-8 rounded-[2rem] group-hover:border-zinc-800 transition-all">
-                            <p className="text-zinc-400 leading-relaxed font-serif italic text-lg line-clamp-3">
+
+                          <div className="glass-card p-10 group-hover:border-white/20 transition-all duration-500">
+                            <p className="text-white/80 leading-relaxed font-serif italic text-xl line-clamp-3 mb-8 group-hover:text-white transition-colors">
                               "{dream.transcript}"
                             </p>
+                            {dream.insight && (
+                              <div className="flex items-start gap-4 pt-8 border-t border-white/5">
+                                <Sparkles className="w-4 h-4 text-dream-accent mt-1 shrink-0" />
+                                <p className="text-sm text-zinc-500 font-serif italic leading-relaxed line-clamp-2">
+                                  {dream.insight}
+                                </p>
+                              </div>
+                            )}
                           </div>
                         </motion.article>
                       ))

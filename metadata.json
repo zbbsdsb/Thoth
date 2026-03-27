@@ -1,5 +1,5 @@
 {
-  "name": "Thoth",
+  "name": "Thoth - AI Dream Archive",
   "description": "A dream archiving system powered by dreambase, focusing on capturing atomic imagery for the future metaverse. dreambase is the underlying imagery database for the Thoth ecosystem.",
   "requestFramePermissions": ["microphone", "geolocation"]
 }
