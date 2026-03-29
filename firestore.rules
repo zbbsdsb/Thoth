@@ -8,10 +8,10 @@ service cloud.firestore {
     // ===============================================================
     //
     // Collection: users
-    // Fields: email (string), created_at (timestamp), daily_usage_count (int), daily_quota_limit (int), last_usage_date (string)
+    // Fields: email (string), created_at (timestamp), daily_usage_count (int), daily_quota_limit (int), last_usage_date (string), total_dreams (int)
     //
     // Collection: dreams
-    // Fields: user_id (string), audio_url (string), transcript (string), created_at (timestamp), duration (number)
+    // Fields: user_id (string), audio_url (string), transcript (string), created_at (timestamp), duration (number), tags (list), insight (string)
     //
     // ===============================================================
 
@@ -24,42 +24,51 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return data.keys().hasAll(['email', 'created_at', 'daily_usage_count', 'daily_quota_limit']) &&
+      return data.keys().hasAll(['email', 'created_at', 'daily_usage_count', 'daily_quota_limit', 'total_dreams']) &&
              data.email is string && data.email.size() < 256 &&
              data.created_at is timestamp &&
              data.daily_usage_count is int &&
              data.daily_usage_count >= 0 &&
              data.daily_quota_limit is int &&
              data.daily_quota_limit >= 0 &&
-             (!('last_usage_date' in data) || (data.last_usage_date is string && data.last_usage_date.size() == 10)) &&
+             data.total_dreams is int &&
+             data.total_dreams >= 0 &&
+             (!('last_usage_date' in data) || data.last_usage_date == null || (data.last_usage_date is string && data.last_usage_date.size() == 10)) &&
              (!('active_provider' in data) || (data.active_provider in ['gemini', 'openai', 'deepseek', 'minimax'])) &&
              (!('external_apis' in data) || data.external_apis is map) &&
              (!('streak' in data) || data.streak is int) &&
-             (!('last_streak_date' in data) || (data.last_streak_date is string && data.last_streak_date.size() == 10));
+             (!('last_streak_date' in data) || data.last_streak_date == null || (data.last_streak_date is string && data.last_streak_date.size() == 10));
     }
 
     function isValidUserUpdate(current, next) {
+      let hasLastUsage = 'last_usage_date' in current && 'last_usage_date' in next;
+      let lastUsageUnchanged = (!('last_usage_date' in current) && !('last_usage_date' in next)) || 
+                               (hasLastUsage && next.last_usage_date == current.last_usage_date);
+      
       return isValidUser(next) &&
              next.email == current.email &&
              next.created_at == current.created_at &&
              next.daily_quota_limit == current.daily_quota_limit &&
+             (next.total_dreams == current.total_dreams || next.total_dreams == current.total_dreams + 1) &&
              (
-               // Case 1: Same day, increment count or update settings/streak
-               (next.last_usage_date == current.last_usage_date && 
+               // Case 1: Same day or null to first date, increment count or update settings/streak
+               (lastUsageUnchanged && 
                 (next.daily_usage_count == current.daily_usage_count || next.daily_usage_count == current.daily_usage_count + 1)) ||
-               // Case 2: New day, reset count to 1
+               // Case 2: New day (including null to first date), reset count to 1
                (next.last_usage_date != current.last_usage_date && next.daily_usage_count == 1) ||
                // Case 3: Just updating settings or streak
-               (next.daily_usage_count == current.daily_usage_count && next.last_usage_date == current.last_usage_date)
+               (next.daily_usage_count == current.daily_usage_count && lastUsageUnchanged)
              );
     }
 
     function isValidDream(data) {
-      return data.keys().hasAll(['user_id', 'audio_url', 'created_at']) &&
+      return data.keys().hasAll(['user_id', 'created_at']) &&
              data.user_id == request.auth.uid &&
-             data.audio_url is string && data.audio_url.size() < 2048 &&
+             (!('audio_url' in data) || (data.audio_url is string && data.audio_url.size() < 2048)) &&
              data.created_at is timestamp &&
              (!('transcript' in data) || (data.transcript is string && data.transcript.size() < 10000)) &&
+             (!('insight' in data) || (data.insight is string && data.insight.size() < 5000)) &&
+             (!('tags' in data) || (data.tags is list && data.tags.size() < 20)) &&
              (!('duration' in data) || data.duration is number) &&
              (!('location' in data) || (data.location is string && data.location.size() < 100));
     }

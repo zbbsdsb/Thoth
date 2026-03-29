@@ -25,11 +25,13 @@
         "user_id": { "type": "string" },
         "audio_url": { "type": "string" },
         "transcript": { "type": "string" },
+        "insight": { "type": "string", "description": "AI generated subconscious analysis" },
+        "tags": { "type": "array", "items": { "type": "string" } },
         "created_at": { "type": "string", "format": "date-time" },
         "duration": { "type": "number" },
         "location": { "type": "string", "description": "Country code or name" }
       },
-      "required": ["user_id", "audio_url", "created_at"]
+      "required": ["user_id", "created_at"]
     },
     "GlobalLocation": {
       "title": "GlobalLocation",
