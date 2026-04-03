@@ -1,48 +1,48 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Mic, 
   MicOff, 
   History, 
   Settings, 
-  Moon, 
-  Sun, 
   Sparkles, 
-  Cloud, 
-  Wind, 
-  Zap,
-  Plus,
+  Globe, 
+  MapPin, 
+  Clock, 
+  Calendar, 
+  Keyboard, 
+  Mic2,
   Trash2,
   Search,
-  ChevronRight,
   LogOut,
   User,
-  Globe,
-  BarChart3,
-  MapPin,
-  Clock,
-  Calendar,
+  Zap,
+  ChevronRight,
   Info,
   AlertCircle,
   CheckCircle2,
   X,
-  Keyboard,
-  Mic2
+  Plus,
+  ArrowRight,
+  Share2,
+  Download,
+  Filter,
+  BarChart3,
+  Moon,
+  Sun,
+  Cloud,
+  Wind,
+  Menu,
+  MoreVertical
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { 
-  initializeApp 
-} from 'firebase/app';
-import { 
-  getAuth, 
   signInWithPopup, 
   GoogleAuthProvider, 
-  onAuthStateChanged, 
   signOut,
   User as FirebaseUser
 } from 'firebase/auth';
 import { 
-  getFirestore, 
   collection, 
   addDoc, 
   query, 
@@ -56,12 +56,10 @@ import {
   getDoc,
   setDoc,
   increment,
-  getDocs,
   limit,
   Timestamp
 } from 'firebase/firestore';
 import { 
-  getStorage, 
   ref, 
   uploadBytes, 
   getDownloadURL 
@@ -69,13 +67,12 @@ import {
 import { Toaster, toast } from 'sonner';
 import Markdown from 'react-markdown';
 
-// --- Firebase Config ---
-import firebaseConfig from '../firebase-applet-config.json';
+// --- Custom Components ---
+import { ThothLogo } from './components/Logo';
+import { WorldMap } from './components/WorldMap';
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
-const storage = getStorage(app);
+// --- Firebase Imports ---
+import { db, auth, storage } from './firebase';
 
 // --- Types ---
 enum OperationType {
@@ -145,6 +142,21 @@ const handleFirestoreError = (error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 };
 
+// --- Framer Motion Variants ---
+const fadeInUp = {
+  initial: { opacity: 0, y: 20 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -20 }
+};
+
+const staggerContainer = {
+  animate: {
+    transition: {
+      staggerChildren: 0.1
+    }
+  }
+};
+
 // --- Main App Component ---
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -152,23 +164,23 @@ export default function App() {
   const [dreams, setDreams] = useState<Dream[]>([]);
   const [globalImagery, setGlobalImagery] = useState<GlobalImagery[]>([]);
   const [globalLocations, setGlobalLocations] = useState<GlobalLocation[]>([]);
+  const [totalUserCount, setTotalUserCount] = useState(0);
   
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setTranscribing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'record' | 'history' | 'global' | 'settings'>('record');
   const [searchQuery, setSearchQuery] = useState("");
-  const [showManualInput, setShowManualInput] = useState(false);
   const [manualText, setManualText] = useState("");
   const [entryMode, setEntryMode] = useState<'voice' | 'text'>('voice');
   const [userCountry, setUserCountry] = useState<string | null>(null);
+  const [selectedDream, setSelectedDream] = useState<Dream | null>(null);
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
 
   // --- Auth & Profile ---
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (u) => {
+    const unsubscribe = auth.onAuthStateChanged(async (u) => {
       setUser(u);
       if (u) {
         const userRef = doc(db, 'users', u.uid);
@@ -219,7 +231,7 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    const q = query(collection(db, 'global_imagery'), orderBy('count', 'desc'), limit(20));
+    const q = query(collection(db, 'global_imagery'), orderBy('count', 'desc'), limit(30));
     const unsubscribe = onSnapshot(q, (snap) => {
       setGlobalImagery(snap.docs.map(d => d.data() as GlobalImagery));
     });
@@ -227,9 +239,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const q = query(collection(db, 'global_locations'), orderBy('count', 'desc'), limit(10));
+    const q = query(collection(db, 'global_locations'), orderBy('count', 'desc'));
     const unsubscribe = onSnapshot(q, (snap) => {
       setGlobalLocations(snap.docs.map(d => d.data() as GlobalLocation));
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    // Real-time count of all registered dreamers
+    const q = query(collection(db, 'users'));
+    const unsubscribe = onSnapshot(q, (snap) => {
+      setTotalUserCount(snap.size);
     });
     return () => unsubscribe();
   }, []);
@@ -302,13 +323,11 @@ export default function App() {
 
     setTranscribing(true);
     try {
-      // 1. Storage
       const dreamId = Math.random().toString(36).substring(7);
       const storageRef = ref(storage, `dreams/${user.uid}/${dreamId}.webm`);
       await uploadBytes(storageRef, audioBlob);
       const audioUrl = await getDownloadURL(storageRef);
 
-      // 2. Transcription
       const reader = new FileReader();
       reader.readAsDataURL(audioBlob);
       const base64Audio = await new Promise<string>((resolve) => {
@@ -322,7 +341,6 @@ export default function App() {
       });
       const transcript = transcriptionRes.text || "No transcription available.";
 
-      // 3. Analysis (Non-blocking)
       let tags: string[] = [];
       let insight = "Subconscious patterns detected.";
       try {
@@ -331,10 +349,8 @@ export default function App() {
         insight = analysis.insight;
       } catch (err: any) {
         console.warn("AI Analysis skipped:", err.message);
-        toast.error(`AI Analysis skipped: ${err.message}`, { duration: 3000 });
       }
 
-      // 4. Save Dream
       await addDoc(collection(db, 'dreams'), {
         user_id: user.uid,
         transcript,
@@ -344,25 +360,14 @@ export default function App() {
         location: userCountry || "Unknown",
         created_at: serverTimestamp(),
       });
-      toast.success("Dream archived successfully.");
-
-      // 5. Global Stats
+      
       await updateGlobalImagery(tags);
-      if (userCountry) await updateGlobalLocation(userCountry);
-
-      // 6. Consolidate User Update
+      await updateGlobalLocation(userCountry || "Unknown");
       await syncUserStats(isUsingPublicQuota);
 
+      toast.success("Dream archived successfully.");
     } catch (err: any) {
-      console.error("Process dream error:", err);
-      let errorMessage = "Failed to process dream.";
-      try {
-        const parsed = JSON.parse(err.message);
-        if (parsed.error) errorMessage = `Process failed: ${parsed.error}`;
-      } catch {
-        if (err.message) errorMessage = `Process failed: ${err.message}`;
-      }
-      toast.error(errorMessage);
+      toast.error("Failed to process dream.");
     } finally {
       setTranscribing(false);
     }
@@ -390,7 +395,7 @@ export default function App() {
         tags = analysis.tags;
         insight = analysis.insight;
       } catch (err: any) {
-        toast.error(`AI Analysis skipped: ${err.message}`);
+        console.warn("AI Analysis skipped:", err.message);
       }
 
       await addDoc(collection(db, 'dreams'), {
@@ -401,24 +406,16 @@ export default function App() {
         location: userCountry || "Unknown",
         created_at: serverTimestamp(),
       });
-      toast.success("Dream archived successfully.");
 
       await updateGlobalImagery(tags);
-      if (userCountry) await updateGlobalLocation(userCountry);
+      await updateGlobalLocation(userCountry || "Unknown");
       await syncUserStats(isUsingPublicQuota);
 
       setManualText("");
       setEntryMode('voice');
-    } catch (err: any) {
-      console.error("Manual save error:", err);
-      let errorMessage = "Failed to save dream.";
-      try {
-        const parsed = JSON.parse(err.message);
-        if (parsed.error) errorMessage = `Save failed: ${parsed.error}`;
-      } catch {
-        if (err.message) errorMessage = `Save failed: ${err.message}`;
-      }
-      toast.error(errorMessage);
+      toast.success("Dream archived successfully.");
+    } catch (err) {
+      toast.error("Failed to save dream.");
     } finally {
       setTranscribing(false);
     }
@@ -480,30 +477,41 @@ export default function App() {
     }, { merge: true });
   };
 
+  // --- Filtered Data ---
+  const filteredDreams = useMemo(() => {
+    return dreams.filter(d => 
+      d.transcript.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      d.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
+  }, [dreams, searchQuery]);
+
   // --- UI Components ---
   return (
-    <div className="min-h-screen bg-[#050505] text-[#E4E3E0] font-sans selection:bg-[#F27D26] selection:text-black overflow-x-hidden">
+    <div className="min-h-screen selection:bg-dream-accent selection:text-white">
       <Toaster position="top-center" theme="dark" />
       
-      {/* Background Atmosphere */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-[#F27D26]/5 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-[#4A90E2]/5 blur-[120px] rounded-full" />
-      </div>
+      {/* Immersive Atmosphere */}
+      <div className="atmosphere" />
 
-      {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 bg-[#050505]/80 backdrop-blur-xl border-b border-white/5">
-        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-3 group cursor-pointer" onClick={() => setActiveTab('record')}>
-            <div className="w-10 h-10 bg-[#F27D26] rounded-xl flex items-center justify-center shadow-lg shadow-[#F27D26]/20 group-hover:scale-105 transition-transform">
-              <Sparkles className="w-6 h-6 text-black" />
+      {/* Header Navigation */}
+      <nav className="fixed top-0 left-0 right-0 z-50 bg-dream-bg/40 backdrop-blur-2xl border-b border-white/5">
+        <div className="max-w-7xl mx-auto px-6 h-24 flex items-center justify-between">
+          <motion.div 
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="flex items-center gap-4 group cursor-pointer" 
+            onClick={() => setActiveTab('record')}
+          >
+            <ThothLogo className="w-12 h-12" />
+            <div className="flex flex-col">
+              <span className="text-2xl font-serif italic font-light tracking-tight dream-text-gradient">Thoth</span>
+              <span className="text-[10px] uppercase tracking-[0.3em] text-white/30 font-bold">AI Dream Archive</span>
             </div>
-            <span className="text-xl font-bold tracking-tight uppercase italic font-serif">Oneiroi</span>
-          </div>
+          </motion.div>
 
-          <div className="hidden md:flex items-center gap-8">
+          <div className="hidden lg:flex items-center gap-10">
             {[
-              { id: 'record', label: 'Record', icon: Mic2 },
+              { id: 'record', label: 'Capture', icon: Mic2 },
               { id: 'history', label: 'Archive', icon: History },
               { id: 'global', label: 'Collective', icon: Globe },
               { id: 'settings', label: 'Settings', icon: Settings },
@@ -511,63 +519,82 @@ export default function App() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`flex items-center gap-2 text-sm font-medium uppercase tracking-widest transition-colors ${
-                  activeTab === tab.id ? 'text-[#F27D26]' : 'text-white/40 hover:text-white'
+                className={`group flex items-center gap-3 text-xs font-bold uppercase tracking-[0.2em] transition-all relative py-2 ${
+                  activeTab === tab.id ? 'text-white' : 'text-white/30 hover:text-white/60'
                 }`}
               >
-                <tab.icon className="w-4 h-4" />
+                <tab.icon className={`w-4 h-4 transition-transform group-hover:scale-110 ${activeTab === tab.id ? 'text-dream-accent' : ''}`} />
                 {tab.label}
+                {activeTab === tab.id && (
+                  <motion.div 
+                    layoutId="nav-underline"
+                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-dream-accent rounded-full"
+                  />
+                )}
               </button>
             ))}
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-6">
             {user ? (
-              <div className="flex items-center gap-3 pl-4 border-l border-white/10">
+              <div className="flex items-center gap-4 pl-6 border-l border-white/10">
                 <div className="text-right hidden sm:block">
-                  <p className="text-xs font-bold uppercase tracking-tighter text-white/40">Dreamer</p>
-                  <p className="text-sm font-medium">{user.displayName?.split(' ')[0]}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/20">Dreamer</p>
+                  <p className="text-sm font-medium text-white/80">{user.displayName?.split(' ')[0]}</p>
                 </div>
-                <img 
+                <motion.img 
+                  whileHover={{ scale: 1.1 }}
                   src={user.photoURL || ""} 
                   alt="Avatar" 
-                  className="w-10 h-10 rounded-full border border-white/10"
+                  className="w-11 h-11 rounded-2xl border border-white/10 shadow-xl"
                   referrerPolicy="no-referrer"
                 />
               </div>
             ) : (
               <button 
                 onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}
-                className="px-6 py-2 bg-white text-black text-sm font-bold uppercase tracking-widest rounded-full hover:bg-[#F27D26] transition-colors"
+                className="px-8 py-3 bg-white text-black text-xs font-bold uppercase tracking-[0.2em] rounded-2xl hover:bg-dream-accent hover:text-white transition-all duration-500 shadow-2xl shadow-white/5"
               >
-                Sign In
+                Begin Journey
               </button>
             )}
           </div>
         </div>
       </nav>
 
-      {/* Main Content */}
-      <main className="pt-32 pb-20 px-6 max-w-7xl mx-auto relative z-10">
+      {/* Main Viewport */}
+      <main className="pt-40 pb-32 px-6 max-w-7xl mx-auto relative z-10">
         <AnimatePresence mode="wait">
           {activeTab === 'record' && (
             <motion.div 
               key="record"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
+              variants={fadeInUp}
+              initial="initial"
+              animate="animate"
+              exit="exit"
               className="flex flex-col items-center justify-center min-h-[60vh] text-center"
             >
-              <div className="mb-12">
-                <h1 className="text-7xl md:text-9xl font-bold uppercase tracking-tighter leading-none mb-6 italic font-serif">
-                  Capture the <span className="text-[#F27D26]">Unseen</span>
-                </h1>
-                <p className="text-xl text-white/40 max-w-2xl mx-auto font-light">
-                  Whisper your subconscious patterns into the archive. Let the collective mind decode the imagery of your sleep.
-                </p>
+              <div className="mb-16">
+                <motion.h1 
+                  initial={{ opacity: 0, y: 30 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.2 }}
+                  className="text-7xl md:text-[10rem] font-serif italic font-light tracking-tighter leading-none mb-8 dream-text-gradient"
+                >
+                  Whisper to the <br />
+                  <span className="text-dream-accent">Subconscious</span>
+                </motion.h1>
+                <motion.p 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.4 }}
+                  className="text-xl text-white/30 max-w-2xl mx-auto font-light leading-relaxed"
+                >
+                  Capture the ephemeral imagery of your sleep. Let the archive decode the patterns that emerge from the deep.
+                </motion.p>
               </div>
 
-              <div className="flex flex-col items-center gap-8">
+              <div className="flex flex-col items-center gap-12">
                 {entryMode === 'voice' ? (
                   <div className="relative">
                     <motion.button
@@ -575,61 +602,90 @@ export default function App() {
                       whileTap={{ scale: 0.95 }}
                       onClick={isRecording ? stopRecording : startRecording}
                       disabled={isTranscribing}
-                      className={`w-40 h-40 rounded-full flex items-center justify-center relative z-10 transition-colors ${
-                        isRecording ? 'bg-red-500' : 'bg-[#F27D26]'
-                      } ${isTranscribing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className={`w-48 h-48 rounded-[60px] flex items-center justify-center relative z-10 transition-all duration-700 shadow-2xl ${
+                        isRecording 
+                          ? 'bg-red-500 shadow-red-500/40 rotate-12' 
+                          : 'bg-dream-accent shadow-dream-accent/40'
+                      } ${isTranscribing ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}
                     >
                       {isRecording ? (
-                        <MicOff className="w-16 h-16 text-white animate-pulse" />
+                        <MicOff className="w-20 h-20 text-white animate-pulse" />
                       ) : (
-                        <Mic className="w-16 h-16 text-black" />
+                        <Mic className="w-20 h-20 text-white" />
                       )}
                     </motion.button>
                     
                     {isRecording && (
-                      <motion.div 
-                        initial={{ scale: 1, opacity: 0.5 }}
-                        animate={{ scale: 1.5, opacity: 0 }}
-                        transition={{ repeat: Infinity, duration: 1.5 }}
-                        className="absolute inset-0 bg-red-500 rounded-full z-0"
-                      />
+                      <div className="absolute inset-0 z-0">
+                        {[1, 2, 3].map((i) => (
+                          <motion.div 
+                            key={i}
+                            initial={{ scale: 1, opacity: 0.5 }}
+                            animate={{ scale: 2.5, opacity: 0 }}
+                            transition={{ repeat: Infinity, duration: 2, delay: i * 0.6 }}
+                            className="absolute inset-0 bg-red-500/20 rounded-[60px]"
+                          />
+                        ))}
+                      </div>
                     )}
                   </div>
                 ) : (
-                  <div className="w-full max-w-2xl bg-white/5 border border-white/10 rounded-3xl p-8 backdrop-blur-xl">
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="w-full max-w-3xl glass-card p-10"
+                  >
                     <textarea
                       value={manualText}
                       onChange={(e) => setManualText(e.target.value)}
-                      placeholder="Describe your dream in detail..."
-                      className="w-full h-48 bg-transparent border-none focus:ring-0 text-xl font-light placeholder:text-white/20 resize-none"
+                      placeholder="Describe the dreamscape..."
+                      className="w-full h-64 bg-transparent border-none focus:ring-0 text-2xl font-serif italic font-light placeholder:text-white/10 resize-none leading-relaxed"
                     />
-                    <div className="flex justify-end mt-4">
+                    <div className="flex justify-between items-center mt-8 pt-8 border-t border-white/5">
+                      <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-white/20 font-bold">
+                        <Info className="w-3 h-3" />
+                        AI Analysis will be applied
+                      </div>
                       <button
                         onClick={handleManualSave}
                         disabled={isTranscribing || !manualText.trim()}
-                        className="px-8 py-3 bg-[#F27D26] text-black font-bold uppercase tracking-widest rounded-full disabled:opacity-50 transition-all hover:scale-105"
+                        className="group flex items-center gap-3 px-10 py-4 bg-white text-black font-bold uppercase tracking-[0.2em] text-xs rounded-2xl disabled:opacity-50 transition-all hover:bg-dream-accent hover:text-white"
                       >
-                        {isTranscribing ? 'Processing...' : 'Archive Dream'}
+                        {isTranscribing ? 'Decoding...' : 'Archive'}
+                        <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
                       </button>
                     </div>
-                  </div>
+                  </motion.div>
                 )}
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-6">
                   <button 
                     onClick={() => setEntryMode(entryMode === 'voice' ? 'text' : 'voice')}
-                    className="flex items-center gap-2 px-6 py-3 rounded-full border border-white/10 hover:bg-white/5 transition-colors text-sm uppercase tracking-widest font-bold"
+                    className="flex items-center gap-3 px-8 py-4 rounded-2xl border border-white/5 bg-white/5 hover:bg-white/10 transition-all text-[10px] uppercase tracking-[0.2em] font-bold text-white/40 hover:text-white"
                   >
                     {entryMode === 'voice' ? <Keyboard className="w-4 h-4" /> : <Mic2 className="w-4 h-4" />}
-                    {entryMode === 'voice' ? 'Type Dream' : 'Voice Record'}
+                    {entryMode === 'voice' ? 'Type Dream' : 'Voice Entry'}
                   </button>
                 </div>
 
                 {isTranscribing && (
-                  <div className="flex items-center gap-3 text-[#F27D26] animate-pulse">
-                    <Sparkles className="w-5 h-5" />
-                    <span className="text-sm font-bold uppercase tracking-widest">Decoding Subconscious...</span>
-                  </div>
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex items-center gap-4 text-dream-accent"
+                  >
+                    <div className="flex gap-1">
+                      {[0, 1, 2].map(i => (
+                        <motion.div 
+                          key={i}
+                          animate={{ height: [4, 16, 4] }}
+                          transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }}
+                          className="w-1 bg-dream-accent rounded-full"
+                        />
+                      ))}
+                    </div>
+                    <span className="text-xs font-bold uppercase tracking-[0.3em]">Decoding Subconscious...</span>
+                  </motion.div>
                 )}
               </div>
             </motion.div>
@@ -638,143 +694,223 @@ export default function App() {
           {activeTab === 'history' && (
             <motion.div 
               key="history"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="space-y-12"
+              variants={fadeInUp}
+              initial="initial"
+              animate="animate"
+              className="space-y-16"
             >
-              <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-10">
                 <div>
-                  <h2 className="text-6xl font-bold uppercase tracking-tighter italic font-serif">Archive</h2>
-                  <p className="text-white/40 uppercase tracking-widest text-sm font-bold mt-2">Your personal subconscious library</p>
+                  <h2 className="text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">The Archive</h2>
+                  <div className="flex items-center gap-4 mt-4">
+                    <span className="text-[10px] uppercase tracking-[0.3em] text-white/20 font-bold">Your personal subconscious library</span>
+                    <div className="h-px w-20 bg-white/10" />
+                    <span className="text-[10px] uppercase tracking-[0.3em] text-dream-accent font-bold">{dreams.length} Dreams</span>
+                  </div>
                 </div>
-                <div className="relative w-full md:w-96">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/20" />
+                <div className="relative w-full md:w-[400px]">
+                  <Search className="absolute left-6 top-1/2 -translate-y-1/2 w-5 h-5 text-white/20" />
                   <input 
                     type="text"
-                    placeholder="Search imagery..."
+                    placeholder="Search imagery or themes..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-full py-4 pl-12 pr-6 focus:border-[#F27D26] outline-none transition-colors"
+                    className="w-full glass-card bg-white/[0.03] border-white/5 rounded-2xl py-5 pl-16 pr-8 focus:border-dream-accent/50 outline-none transition-all text-sm font-medium"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {dreams.filter(d => d.transcript.toLowerCase().includes(searchQuery.toLowerCase())).map((dream) => (
+              <motion.div 
+                variants={staggerContainer}
+                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
+              >
+                {filteredDreams.map((dream) => (
                   <motion.div 
                     layout
                     key={dream.id}
-                    className="group bg-white/5 border border-white/10 rounded-3xl p-8 hover:bg-white/[0.08] transition-all cursor-pointer relative overflow-hidden"
+                    variants={fadeInUp}
+                    onClick={() => setSelectedDream(dream)}
+                    className="group glass-card p-10 hover:bg-white/[0.07] transition-all duration-500 cursor-pointer relative overflow-hidden flex flex-col h-full"
                   >
-                    <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="absolute top-0 right-0 p-6 opacity-0 group-hover:opacity-100 transition-all duration-500 translate-y-2 group-hover:translate-y-0">
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
-                          deleteDoc(doc(db, 'dreams', dream.id));
+                          if (confirm("Permanently erase this memory?")) {
+                            deleteDoc(doc(db, 'dreams', dream.id));
+                          }
                         }}
-                        className="p-2 text-white/20 hover:text-red-500 transition-colors"
+                        className="p-3 bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white rounded-xl transition-all"
                       >
                         <Trash2 className="w-5 h-5" />
                       </button>
                     </div>
                     
-                    <div className="flex items-center gap-2 mb-6 text-xs font-bold uppercase tracking-widest text-[#F27D26]">
-                      <Calendar className="w-3 h-3" />
-                      {dream.created_at?.toDate().toLocaleDateString()}
-                      <span className="mx-2 text-white/10">•</span>
-                      <MapPin className="w-3 h-3" />
+                    <div className="flex items-center gap-3 mb-8 text-[10px] font-bold uppercase tracking-[0.2em] text-white/20">
+                      <Calendar className="w-3.5 h-3.5 text-dream-accent" />
+                      {dream.created_at?.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      <span className="mx-2 opacity-30">|</span>
+                      <MapPin className="w-3.5 h-3.5" />
                       {dream.location}
                     </div>
 
-                    <p className="text-lg font-light leading-relaxed mb-6 line-clamp-3 text-white/80">
+                    <p className="text-xl font-serif italic font-light leading-relaxed mb-10 line-clamp-4 text-white/70 group-hover:text-white transition-colors">
                       "{dream.transcript}"
                     </p>
 
-                    <div className="space-y-4">
+                    <div className="mt-auto space-y-6">
                       <div className="flex flex-wrap gap-2">
                         {dream.tags.map(tag => (
-                          <span key={tag} className="px-3 py-1 bg-white/5 border border-white/10 rounded-full text-[10px] uppercase tracking-widest font-bold text-white/40">
+                          <span key={tag} className="px-4 py-1.5 bg-white/5 border border-white/5 rounded-full text-[9px] uppercase tracking-[0.2em] font-bold text-white/30 group-hover:text-dream-accent group-hover:border-dream-accent/20 transition-all">
                             #{tag}
                           </span>
                         ))}
                       </div>
-                      <div className="pt-4 border-t border-white/5">
-                        <p className="text-xs italic font-serif text-[#F27D26]/80 leading-relaxed">
+                      <div className="pt-6 border-t border-white/5">
+                        <p className="text-xs italic font-serif text-white/40 group-hover:text-dream-accent/80 leading-relaxed transition-colors">
                           {dream.insight}
                         </p>
                       </div>
                     </div>
                   </motion.div>
                 ))}
-              </div>
+              </motion.div>
+
+              {filteredDreams.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-40 text-center space-y-6">
+                  <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center">
+                    <Search className="w-8 h-8 text-white/10" />
+                  </div>
+                  <p className="text-white/20 uppercase tracking-[0.3em] text-xs font-bold">No matching imagery found in the archive</p>
+                </div>
+              )}
             </motion.div>
           )}
 
           {activeTab === 'global' && (
             <motion.div 
               key="global"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="grid grid-cols-1 lg:grid-cols-2 gap-12"
+              variants={fadeInUp}
+              initial="initial"
+              animate="animate"
+              className="grid grid-cols-1 lg:grid-cols-12 gap-12"
             >
-              <div className="space-y-8">
+              <div className="lg:col-span-7 space-y-12">
                 <div>
-                  <h2 className="text-6xl font-bold uppercase tracking-tighter italic font-serif">Collective</h2>
-                  <p className="text-white/40 uppercase tracking-widest text-sm font-bold mt-2">Global subconscious patterns</p>
+                  <h2 className="text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">The Collective</h2>
+                  <p className="text-white/30 uppercase tracking-[0.3em] text-[10px] font-bold mt-4">Synthesized patterns from the global subconscious</p>
                 </div>
 
-                <div className="bg-white/5 border border-white/10 rounded-[40px] p-10">
-                  <h3 className="text-xl font-bold uppercase tracking-widest mb-8 flex items-center gap-3">
-                    <Sparkles className="w-6 h-6 text-[#F27D26]" />
+                <div className="glass-card p-12 relative overflow-hidden min-h-[500px] flex flex-col">
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-dream-accent/5 blur-[100px] rounded-full -translate-y-1/2 translate-x-1/2" />
+                  
+                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-12 flex items-center gap-4 text-white/60">
+                    <Globe className="w-5 h-5 text-dream-accent" />
+                    Global Subconscious Pulse
+                  </h3>
+                  
+                  <div className="flex-1 w-full">
+                    <WorldMap data={globalLocations} />
+                  </div>
+                </div>
+
+                <div className="glass-card p-12 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-dream-accent/5 blur-[100px] rounded-full -translate-y-1/2 translate-x-1/2" />
+                  
+                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-12 flex items-center gap-4 text-white/60">
+                    <Sparkles className="w-5 h-5 text-dream-accent" />
                     Dominant Imagery
                   </h3>
+                  
                   <div className="flex flex-wrap gap-4">
                     {globalImagery.map((item, i) => (
-                      <div 
+                      <motion.div 
                         key={item.tag}
-                        className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-full pl-4 pr-6 py-3 hover:scale-105 transition-transform cursor-default"
-                        style={{ opacity: 1 - (i * 0.04) }}
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{ delay: i * 0.05 }}
+                        className="flex items-center gap-4 bg-white/[0.03] border border-white/5 rounded-2xl pl-5 pr-7 py-4 hover:bg-dream-accent/10 hover:border-dream-accent/20 transition-all cursor-default group"
                       >
-                        <span className="text-sm font-bold uppercase tracking-widest">#{item.tag}</span>
-                        <span className="text-xs font-mono text-[#F27D26]">{item.count}</span>
-                      </div>
+                        <span className="text-xs font-bold uppercase tracking-[0.2em] text-white/40 group-hover:text-white">#{item.tag}</span>
+                        <div className="h-4 w-px bg-white/10" />
+                        <span className="text-xs font-mono text-dream-accent font-bold">{item.count}</span>
+                      </motion.div>
                     ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="glass-card p-10 flex flex-col justify-between">
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/20">Global Sync</p>
+                      <h4 className="text-2xl font-serif italic font-light">Active Dreamers</h4>
+                    </div>
+                    <div className="mt-8 flex items-end justify-between">
+                      <div className="text-5xl font-mono font-bold tracking-tighter text-dream-accent">
+                        {totalUserCount.toLocaleString()}
+                      </div>
+                      <div className="flex gap-1 mb-2">
+                        {[1, 2, 3, 4].map(i => (
+                          <div key={i} className="w-1 h-4 bg-dream-accent/20 rounded-full overflow-hidden">
+                            <motion.div 
+                              animate={{ height: ['20%', '100%', '20%'] }}
+                              transition={{ repeat: Infinity, duration: 1.5, delay: i * 0.3 }}
+                              className="w-full bg-dream-accent"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="glass-card p-10 flex flex-col justify-between bg-dream-accent/5 border-dream-accent/10">
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-dream-accent/40">Collective Data</p>
+                      <h4 className="text-2xl font-serif italic font-light">Total Archived</h4>
+                    </div>
+                    <div className="mt-8 text-6xl font-mono font-bold tracking-tighter dream-text-gradient">
+                      {globalLocations.reduce((acc, curr) => acc + curr.count, 0).toLocaleString()}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="space-y-8">
-                <div className="bg-white/5 border border-white/10 rounded-[40px] p-10">
-                  <h3 className="text-xl font-bold uppercase tracking-widest mb-8 flex items-center gap-3">
-                    <MapPin className="w-6 h-6 text-[#4A90E2]" />
+              <div className="lg:col-span-5 space-y-12">
+                <div className="glass-card p-12 h-full">
+                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-12 flex items-center gap-4 text-white/60">
+                    <Globe className="w-5 h-5 text-[#4A90E2]" />
                     Dreaming Regions
                   </h3>
-                  <div className="space-y-6">
-                    {globalLocations.map((loc, i) => (
-                      <div key={loc.country} className="space-y-2">
-                        <div className="flex justify-between text-sm font-bold uppercase tracking-widest">
-                          <span>{loc.country}</span>
-                          <span className="text-white/40">{loc.count} dreams</span>
+                  
+                  <div className="space-y-10">
+                    {globalLocations.slice(0, 12).map((loc, i) => (
+                      <div key={loc.country} className="space-y-4">
+                        <div className="flex justify-between items-end">
+                          <div className="flex items-center gap-3">
+                            <span className="text-[10px] font-mono text-white/20">0{i + 1}</span>
+                            <span className="text-xs font-bold uppercase tracking-[0.2em]">{loc.country}</span>
+                          </div>
+                          <span className="text-[10px] font-mono text-dream-accent font-bold">{loc.count} DREAMS</span>
                         </div>
-                        <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                        <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
                           <motion.div 
                             initial={{ width: 0 }}
                             animate={{ width: `${(loc.count / (globalLocations[0]?.count || 1)) * 100}%` }}
-                            className="h-full bg-gradient-to-r from-[#4A90E2] to-[#F27D26]"
+                            transition={{ duration: 1.5, delay: i * 0.1 }}
+                            className="h-full bg-gradient-to-r from-[#4A90E2] to-dream-accent"
                           />
                         </div>
                       </div>
                     ))}
                   </div>
-                </div>
 
-                <div className="bg-[#F27D26] text-black rounded-[40px] p-10 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-2xl font-bold uppercase tracking-tighter mb-1">Total Archived</h3>
-                    <p className="text-black/60 text-sm font-bold uppercase tracking-widest">Global subconscious data</p>
-                  </div>
-                  <div className="text-6xl font-bold font-mono tracking-tighter">
-                    {globalLocations.reduce((acc, curr) => acc + curr.count, 0)}
+                  <div className="mt-16 pt-12 border-t border-white/5">
+                    <div className="flex items-start gap-4 p-6 bg-white/[0.02] rounded-3xl border border-white/5">
+                      <Info className="w-5 h-5 text-white/20 mt-1" />
+                      <p className="text-[10px] leading-relaxed text-white/30 uppercase tracking-widest font-medium">
+                        Location data is synthesized anonymously to map global subconscious trends without compromising individual dreamer privacy.
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -784,44 +920,54 @@ export default function App() {
           {activeTab === 'settings' && (
             <motion.div 
               key="settings"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="max-w-2xl mx-auto space-y-12"
+              variants={fadeInUp}
+              initial="initial"
+              animate="animate"
+              className="max-w-3xl mx-auto space-y-16"
             >
-              <div>
-                <h2 className="text-6xl font-bold uppercase tracking-tighter italic font-serif">Settings</h2>
-                <p className="text-white/40 uppercase tracking-widest text-sm font-bold mt-2">Configure your dream interface</p>
+              <div className="text-center">
+                <h2 className="text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">Interface</h2>
+                <p className="text-white/30 uppercase tracking-[0.3em] text-[10px] font-bold mt-4">Configure your subconscious connection</p>
               </div>
 
-              <div className="space-y-6">
-                <div className="bg-white/5 border border-white/10 rounded-3xl p-8">
-                  <h3 className="text-lg font-bold uppercase tracking-widest mb-6 flex items-center gap-3">
-                    <User className="w-5 h-5 text-[#F27D26]" />
-                    Profile Stats
+              <div className="space-y-8">
+                <div className="glass-card p-12">
+                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-10 flex items-center gap-4 text-white/60">
+                    <User className="w-5 h-5 text-dream-accent" />
+                    Dreamer Identity
                   </h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-white/5 rounded-2xl p-4">
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-white/40 mb-1">Total Dreams</p>
-                      <p className="text-2xl font-bold font-mono">{profile?.total_dreams || 0}</p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="bg-white/[0.03] border border-white/5 rounded-3xl p-6">
+                      <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/20 mb-2">Total Archived</p>
+                      <p className="text-3xl font-mono font-bold text-white/80">{profile?.total_dreams || 0}</p>
                     </div>
-                    <div className="bg-white/5 rounded-2xl p-4">
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-white/40 mb-1">Current Streak</p>
-                      <p className="text-2xl font-bold font-mono text-[#F27D26]">{profile?.streak || 0} Days</p>
+                    <div className="bg-white/[0.03] border border-white/5 rounded-3xl p-6">
+                      <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/20 mb-2">Current Streak</p>
+                      <p className="text-3xl font-mono font-bold text-dream-accent">{profile?.streak || 0} <span className="text-xs uppercase tracking-widest">Days</span></p>
+                    </div>
+                    <div className="bg-white/[0.03] border border-white/5 rounded-3xl p-6">
+                      <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/20 mb-2">Member Since</p>
+                      <p className="text-xl font-mono font-bold text-white/60">{profile?.created_at?.toDate().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</p>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white/5 border border-white/10 rounded-3xl p-8">
-                  <h3 className="text-lg font-bold uppercase tracking-widest mb-6 flex items-center gap-3">
-                    <Zap className="w-5 h-5 text-[#F27D26]" />
-                    AI Configuration
+                <div className="glass-card p-12">
+                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-10 flex items-center gap-4 text-white/60">
+                    <Zap className="w-5 h-5 text-dream-accent" />
+                    AI Synthesis
                   </h3>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-widest text-white/40 mb-2">Minimax API Key (Optional)</label>
+                  
+                  <div className="space-y-8">
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-end">
+                        <label className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">Minimax API Key</label>
+                        <span className="text-[9px] text-white/20 italic">Optional: Removes public quota</span>
+                      </div>
                       <input 
                         type="password"
-                        placeholder="••••••••••••••••"
+                        placeholder="Enter your private key..."
                         value={profile?.external_apis?.minimax || ""}
                         onChange={(e) => {
                           if (!user) return;
@@ -829,46 +975,152 @@ export default function App() {
                             'external_apis.minimax': e.target.value
                           });
                         }}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-4 focus:border-[#F27D26] outline-none transition-colors font-mono text-sm"
+                        className="w-full bg-white/[0.03] border border-white/5 rounded-2xl py-5 px-6 focus:border-dream-accent/50 outline-none transition-all font-mono text-sm"
                       />
-                      <p className="text-[10px] text-white/20 mt-2 italic">Providing your own key removes the 3-dream daily public quota.</p>
+                    </div>
+
+                    <div className="p-6 bg-dream-accent/5 border border-dream-accent/10 rounded-2xl flex items-start gap-4">
+                      <Zap className="w-5 h-5 text-dream-accent mt-1" />
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold uppercase tracking-widest text-dream-accent">Public Quota Active</p>
+                        <p className="text-[10px] leading-relaxed text-white/40 uppercase tracking-widest">
+                          You are currently using the public Gemini 3.1 Flash quota. 
+                          Remaining today: <span className="text-white">{(profile?.daily_quota_limit || 3) - (profile?.daily_usage_count || 0)}</span> dreams.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <button 
-                  onClick={() => signOut(auth)}
-                  className="w-full py-4 bg-red-500/10 text-red-500 border border-red-500/20 rounded-2xl font-bold uppercase tracking-widest text-sm hover:bg-red-500 hover:text-white transition-all flex items-center justify-center gap-2"
-                >
-                  <LogOut className="w-4 h-4" />
-                  Sign Out
-                </button>
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => signOut(auth)}
+                    className="flex-1 py-5 bg-red-500/5 text-red-500 border border-red-500/10 rounded-2xl font-bold uppercase tracking-[0.3em] text-[10px] hover:bg-red-500 hover:text-white transition-all flex items-center justify-center gap-3"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Terminate Connection
+                  </button>
+                </div>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </main>
 
-      {/* Footer Stats */}
-      <footer className="fixed bottom-0 left-0 right-0 z-40 bg-[#050505]/80 backdrop-blur-xl border-t border-white/5 py-4">
-        <div className="max-w-7xl mx-auto px-6 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.2em] text-white/20">
-          <div className="flex items-center gap-8">
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              Collective Sync Active
+      {/* Persistent Footer Stats */}
+      <footer className="fixed bottom-0 left-0 right-0 z-40 bg-dream-bg/40 backdrop-blur-2xl border-t border-white/5 py-6">
+        <div className="max-w-7xl mx-auto px-8 flex items-center justify-between text-[9px] font-bold uppercase tracking-[0.3em] text-white/20">
+          <div className="flex items-center gap-10">
+            <div className="flex items-center gap-3">
+              <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)] animate-pulse" />
+              <span className="text-white/40">Collective Sync Active</span>
             </div>
-            <div className="hidden sm:flex items-center gap-2">
-              <Clock className="w-3 h-3" />
-              {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} UTC
+            <div className="hidden md:flex items-center gap-3">
+              <Clock className="w-3.5 h-3.5" />
+              {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} UTC
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <span>Quota: {profile?.daily_usage_count || 0}/{profile?.daily_quota_limit || 3}</span>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3">
+              <span className="text-white/10">Quota Status</span>
+              <span className={`px-2 py-0.5 rounded-md ${
+                (profile?.daily_usage_count || 0) >= (profile?.daily_quota_limit || 3) 
+                ? 'bg-red-500/20 text-red-500' 
+                : 'bg-dream-accent/20 text-dream-accent'
+              }`}>
+                {profile?.daily_usage_count || 0} / {profile?.daily_quota_limit || 3}
+              </span>
+            </div>
             <span className="text-white/5">|</span>
-            <span className="text-[#F27D26]/60">Oneiroi v1.0.4</span>
+            <span className="text-white/40 italic font-serif lowercase tracking-normal text-xs">Thoth v1.0.8 — Powered by dreambase</span>
           </div>
         </div>
       </footer>
+
+      {/* Dream Detail Modal */}
+      <AnimatePresence>
+        {selectedDream && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedDream(null)}
+              className="absolute inset-0 bg-dream-bg/90 backdrop-blur-xl"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-4xl glass-card p-12 overflow-y-auto max-h-[90vh]"
+            >
+              <button 
+                onClick={() => setSelectedDream(null)}
+                className="absolute top-8 right-8 p-3 hover:bg-white/5 rounded-2xl transition-colors"
+              >
+                <X className="w-6 h-6 text-white/20" />
+              </button>
+
+              <div className="space-y-10">
+                <div className="flex items-center gap-4 text-xs font-bold uppercase tracking-[0.3em] text-dream-accent">
+                  <Calendar className="w-4 h-4" />
+                  {selectedDream.created_at?.toDate().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                </div>
+
+                <div className="space-y-6">
+                  <h3 className="text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Transcript</h3>
+                  <p className="text-3xl md:text-4xl font-serif italic font-light leading-relaxed text-white/90">
+                    "{selectedDream.transcript}"
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-12 pt-12 border-t border-white/5">
+                  <div className="space-y-6">
+                    <h3 className="text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Psychological Insight</h3>
+                    <div className="p-8 bg-dream-accent/5 border border-dream-accent/10 rounded-[32px]">
+                      <p className="text-lg font-serif italic text-dream-accent/90 leading-relaxed">
+                        {selectedDream.insight}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-6">
+                    <h3 className="text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Imagery Tags</h3>
+                    <div className="flex flex-wrap gap-3">
+                      {selectedDream.tags.map(tag => (
+                        <span key={tag} className="px-6 py-3 bg-white/5 border border-white/5 rounded-2xl text-xs uppercase tracking-[0.2em] font-bold text-white/40">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="pt-8 flex items-center gap-6">
+                      <div className="flex flex-col">
+                        <span className="text-[9px] uppercase tracking-widest text-white/20 font-bold">Origin</span>
+                        <span className="text-sm font-medium text-white/60">{selectedDream.location}</span>
+                      </div>
+                      <div className="h-8 w-px bg-white/5" />
+                      <div className="flex flex-col">
+                        <span className="text-[9px] uppercase tracking-widest text-white/20 font-bold">Sync ID</span>
+                        <span className="text-sm font-mono text-white/40">{selectedDream.id}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-4 pt-10">
+                  <button className="flex items-center gap-3 px-8 py-4 bg-white/5 border border-white/5 rounded-2xl text-[10px] uppercase tracking-[0.2em] font-bold text-white/40 hover:text-white transition-all">
+                    <Share2 className="w-4 h-4" />
+                    Share Pattern
+                  </button>
+                  <button className="flex items-center gap-3 px-8 py-4 bg-white/5 border border-white/5 rounded-2xl text-[10px] uppercase tracking-[0.2em] font-bold text-white/40 hover:text-white transition-all">
+                    <Download className="w-4 h-4" />
+                    Export Data
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
