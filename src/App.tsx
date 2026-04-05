@@ -135,6 +135,15 @@ const handleFirestoreError = (error: unknown, operationType: OperationType, path
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
     },
     operationType,
     path
@@ -169,15 +178,48 @@ export default function App() {
   
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setTranscribing] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [isDreamLost, setIsDreamLost] = useState(false);
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const [activeTab, setActiveTab] = useState<'record' | 'history' | 'global' | 'settings'>('record');
   const [searchQuery, setSearchQuery] = useState("");
   const [manualText, setManualText] = useState("");
   const [entryMode, setEntryMode] = useState<'voice' | 'text'>('voice');
   const [userCountry, setUserCountry] = useState<string | null>(null);
   const [selectedDream, setSelectedDream] = useState<Dream | null>(null);
+  const [dreamToDelete, setDreamToDelete] = useState<{id: string, location: string} | null>(null);
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
+
+  // --- Loss Aversion: Memory Collapse Countdown ---
+  useEffect(() => {
+    if (activeTab === 'record' && !isRecording && !isTranscribing && countdown === null && !isDreamLost) {
+      // Start a 3-minute countdown (180 seconds) when entering record tab
+      setCountdown(180);
+    }
+  }, [activeTab, isRecording, isTranscribing, countdown, isDreamLost]);
+
+  useEffect(() => {
+    if (countdown !== null && countdown > 0) {
+      countdownTimerRef.current = setInterval(() => {
+        setCountdown(prev => (prev !== null ? prev - 1 : null));
+      }, 1000);
+    } else if (countdown === 0) {
+      setIsDreamLost(true);
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    }
+    return () => {
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    };
+  }, [countdown]);
+
+  const formatCountdown = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   // --- Auth & Profile ---
   useEffect(() => {
@@ -235,7 +277,7 @@ export default function App() {
     const q = query(collection(db, 'global_imagery'), orderBy('count', 'desc'), limit(30));
     const unsubscribe = onSnapshot(q, (snap) => {
       setGlobalImagery(snap.docs.map(d => d.data() as GlobalImagery));
-    });
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'global_imagery'));
     return () => unsubscribe();
   }, []);
 
@@ -245,7 +287,7 @@ export default function App() {
       const locs = snap.docs.map(d => d.data() as GlobalLocation);
       console.log("Global locations updated:", locs);
       setGlobalLocations(locs);
-    });
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'global_locations'));
     return () => unsubscribe();
   }, []);
 
@@ -265,7 +307,7 @@ export default function App() {
           country,
           count,
           last_updated: serverTimestamp()
-        }, { merge: true });
+        }, { merge: true }).catch(err => handleFirestoreError(err, OperationType.WRITE, `global_locations/${country}`));
       });
     }
   }, [user, dreams.length, globalLocations.length]);
@@ -275,7 +317,7 @@ export default function App() {
     const q = query(collection(db, 'users'));
     const unsubscribe = onSnapshot(q, (snap) => {
       setTotalUserCount(snap.size);
-    });
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'users'));
     return () => unsubscribe();
   }, []);
 
@@ -307,6 +349,10 @@ export default function App() {
       const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/wav';
       mediaRecorder.current = new MediaRecorder(stream, { mimeType });
       audioChunks.current = [];
+
+      // Stop countdown when recording starts
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+      setCountdown(null);
 
       mediaRecorder.current.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunks.current.push(e.data);
@@ -385,7 +431,8 @@ export default function App() {
         console.warn("AI Analysis skipped:", err.message);
       }
 
-      await addDoc(collection(db, 'dreams'), {
+      const dreamPath = 'dreams';
+      await addDoc(collection(db, dreamPath), {
         user_id: user.uid,
         transcript,
         audio_url: audioUrl,
@@ -393,7 +440,7 @@ export default function App() {
         insight,
         location: userCountry || "Unknown",
         created_at: serverTimestamp(),
-      });
+      }).catch(err => handleFirestoreError(err, OperationType.CREATE, dreamPath));
       
       await updateGlobalImagery(tags);
       await updateGlobalLocation(userCountry || "Unknown");
@@ -401,6 +448,7 @@ export default function App() {
 
       toast.success("Dream archived successfully.");
     } catch (err: any) {
+      if (err.message.includes('Firestore Error')) throw err;
       toast.error("Failed to process dream.");
     } finally {
       setTranscribing(false);
@@ -410,6 +458,10 @@ export default function App() {
   const handleManualSave = async () => {
     if (!user || !profile || !manualText.trim()) return;
     
+    // Stop countdown when saving starts
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    setCountdown(null);
+
     const isUsingPublicQuota = !hasUserKey;
     const today = new Date().toISOString().split('T')[0];
     const isNewDay = profile.last_usage_date !== today;
@@ -432,14 +484,15 @@ export default function App() {
         console.warn("AI Analysis skipped:", err.message);
       }
 
-      await addDoc(collection(db, 'dreams'), {
+      const dreamPath = 'dreams';
+      await addDoc(collection(db, dreamPath), {
         user_id: user.uid,
         transcript: manualText,
         tags,
         insight,
         location: userCountry || "Unknown",
         created_at: serverTimestamp(),
-      });
+      }).catch(err => handleFirestoreError(err, OperationType.CREATE, dreamPath));
 
       await updateGlobalImagery(tags);
       await updateGlobalLocation(userCountry || "Unknown");
@@ -448,7 +501,8 @@ export default function App() {
       setManualText("");
       setEntryMode('voice');
       toast.success("Dream archived successfully.");
-    } catch (err) {
+    } catch (err: any) {
+      if (err.message.includes('Firestore Error')) throw err;
       toast.error("Failed to save dream.");
     } finally {
       setTranscribing(false);
@@ -498,7 +552,7 @@ export default function App() {
         tag: tag.toLowerCase(),
         count: increment(1),
         last_updated: serverTimestamp()
-      }, { merge: true });
+      }, { merge: true }).catch(err => handleFirestoreError(err, OperationType.WRITE, `global_imagery/${tag.toLowerCase()}`));
     }
   };
 
@@ -511,26 +565,35 @@ export default function App() {
         country,
         count: increment(delta),
         last_updated: serverTimestamp()
-      }, { merge: true });
+      }, { merge: true }).catch(err => handleFirestoreError(err, OperationType.WRITE, `global_locations/${country}`));
     } catch (err) {
+      if (err instanceof Error && err.message.includes('Firestore Error')) throw err;
       console.error("Failed to update global location:", err);
     }
   };
 
   const deleteDream = async (dreamId: string, location: string) => {
     if (!user) return;
-    if (!window.confirm("Are you sure you want to delete this dream? This action is irreversible.")) return;
+    setDreamToDelete({ id: dreamId, location });
+  };
+
+  const confirmDeleteDream = async () => {
+    if (!user || !dreamToDelete) return;
+    const { id: dreamId, location } = dreamToDelete;
     
     try {
-      await deleteDoc(doc(db, 'dreams', dreamId));
+      await deleteDoc(doc(db, 'dreams', dreamId)).catch(err => handleFirestoreError(err, OperationType.DELETE, `dreams/${dreamId}`));
       await updateDoc(doc(db, 'users', user.uid), {
         total_dreams: increment(-1)
-      });
+      }).catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`));
       await updateGlobalLocation(location || "Unknown", -1);
       toast.success("Dream deleted successfully.");
     } catch (err) {
+      if (err instanceof Error && err.message.includes('Firestore Error')) throw err;
       console.error(err);
       toast.error("Failed to delete dream.");
+    } finally {
+      setDreamToDelete(null);
     }
   };
 
@@ -654,24 +717,88 @@ export default function App() {
               exit="exit"
               className="flex flex-col items-center justify-center min-h-[60vh] text-center"
             >
-              <div className="mb-10 sm:mb-16">
+              <div className="mb-10 sm:mb-16 relative">
+                {/* Loss Aversion Mist Overlay */}
+                <AnimatePresence>
+                  {countdown !== null && !isDreamLost && (
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 0.4 + (1 - countdown / 180) * 0.6 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 -z-10 pointer-events-none"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-b from-transparent via-dream-bg to-dream-bg blur-3xl scale-150" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
                 <motion.h1 
                   initial={{ opacity: 0, y: 30 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.2 }}
+                  animate={{ 
+                    opacity: isDreamLost ? 0.2 : 1, 
+                    y: 0,
+                    filter: isDreamLost ? 'blur(8px)' : 'blur(0px)'
+                  }}
+                  transition={{ delay: 0.2, duration: 2 }}
                   className="text-5xl sm:text-7xl md:text-[10rem] font-serif italic font-light tracking-tighter leading-[0.9] sm:leading-none mb-6 sm:mb-8 dream-text-gradient"
                 >
-                  Whisper to the <br className="hidden sm:block" />
-                  <span className="text-dream-accent">Subconscious</span>
+                  {isDreamLost ? 'The Dream has' : 'Whisper to the'} <br className="hidden sm:block" />
+                  <span className={isDreamLost ? 'text-white/20' : 'text-dream-accent'}>
+                    {isDreamLost ? 'Dissolved' : 'Subconscious'}
+                  </span>
                 </motion.h1>
-                <motion.p 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.4 }}
-                  className="text-base sm:text-xl text-white/30 max-w-2xl mx-auto font-light leading-relaxed px-4 sm:px-0"
-                >
-                  Capture the ephemeral imagery of your sleep. Let the archive decode the patterns that emerge from the deep.
-                </motion.p>
+
+                <AnimatePresence>
+                  {countdown !== null && !isDreamLost && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="flex flex-col items-center gap-2 mb-8"
+                    >
+                      <div className="flex items-center gap-3 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-full">
+                        <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                        <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-red-500/80">
+                          Memory Collapse in {formatCountdown(countdown)}
+                        </span>
+                      </div>
+                      <p className="text-[9px] uppercase tracking-widest text-white/20">Capture now before the imagery fades forever</p>
+                    </motion.div>
+                  )}
+                  {isDreamLost && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="flex flex-col items-center gap-4 mb-8"
+                    >
+                      <div className="px-6 py-3 bg-white/5 border border-white/10 rounded-2xl">
+                        <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">
+                          Signal Lost: This dreamscape has returned to the void
+                        </span>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          setIsDreamLost(false);
+                          setCountdown(180);
+                        }}
+                        className="text-[9px] uppercase tracking-widest text-dream-accent hover:underline"
+                      >
+                        Attempt to recall fragments
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {!isDreamLost && (
+                  <motion.p 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.4 }}
+                    className="text-base sm:text-xl text-white/30 max-w-2xl mx-auto font-light leading-relaxed px-4 sm:px-0"
+                  >
+                    Capture the ephemeral imagery of your sleep. Let the archive decode the patterns that emerge from the deep.
+                  </motion.p>
+                )}
               </div>
 
               <div className="flex flex-col items-center gap-8 sm:gap-12">
@@ -779,6 +906,34 @@ export default function App() {
               animate="animate"
               className="space-y-10 sm:space-y-16"
             >
+              {/* Ghost Prompt for Unrecorded Dreams */}
+              {profile && profile.last_usage_date !== new Date().toISOString().split('T')[0] && dreams.length > 0 && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="p-8 sm:p-10 glass-card bg-red-500/5 border-red-500/10 relative overflow-hidden group"
+                >
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-red-500/5 blur-3xl rounded-full -translate-y-1/2 translate-x-1/2 group-hover:bg-red-500/10 transition-all duration-1000" />
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-6 relative z-10">
+                    <div className="flex items-center gap-6">
+                      <div className="w-16 h-16 rounded-2xl bg-red-500/10 flex items-center justify-center">
+                        <Wind className="w-8 h-8 text-red-500/40 animate-pulse" />
+                      </div>
+                      <div className="space-y-1">
+                        <h4 className="text-xl font-serif italic text-red-500/80">Unconscious Noise Detected</h4>
+                        <p className="text-[10px] uppercase tracking-widest text-white/20 font-bold">You had an unrecorded dream last night. It is dissolving into the void.</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setActiveTab('record')}
+                      className="px-8 py-4 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white border border-red-500/20 rounded-2xl text-[10px] font-bold uppercase tracking-[0.3em] transition-all"
+                    >
+                      Attempt Recovery
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 sm:gap-10">
                 <div>
                   <h2 className="text-5xl sm:text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">The Archive</h2>
@@ -1114,6 +1269,49 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {dreamToDelete && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDreamToDelete(null)}
+              className="absolute inset-0 bg-dream-bg/80 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="w-full max-w-sm glass-card p-8 sm:p-10 relative z-10 text-center"
+            >
+              <div className="w-20 h-20 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-6">
+                <Trash2 className="w-10 h-10 text-red-500" />
+              </div>
+              <h3 className="text-2xl font-serif italic text-white mb-4">Dissolve this memory?</h3>
+              <p className="text-sm text-white/40 mb-8 leading-relaxed">
+                This dream will be returned to the void. This action cannot be reversed.
+              </p>
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={confirmDeleteDream}
+                  className="w-full py-4 bg-red-500 text-white rounded-2xl text-[10px] font-bold uppercase tracking-[0.3em] hover:bg-red-600 transition-colors"
+                >
+                  Confirm Dissolution
+                </button>
+                <button 
+                  onClick={() => setDreamToDelete(null)}
+                  className="w-full py-4 bg-white/5 text-white/60 rounded-2xl text-[10px] font-bold uppercase tracking-[0.3em] hover:bg-white/10 transition-colors"
+                >
+                  Keep Fragment
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Dream Detail Modal */}
       <AnimatePresence>
