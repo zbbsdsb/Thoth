@@ -49,7 +49,7 @@ service cloud.firestore {
              next.email == current.email &&
              next.created_at == current.created_at &&
              next.daily_quota_limit == current.daily_quota_limit &&
-             (next.total_dreams == current.total_dreams || next.total_dreams == current.total_dreams + 1) &&
+             (next.total_dreams == current.total_dreams || next.total_dreams == current.total_dreams + 1 || next.total_dreams == current.total_dreams - 1) &&
              (
                // Case 1: Same day or null to first date, increment count or update settings/streak
                (lastUsageUnchanged && 
@@ -68,6 +68,7 @@ service cloud.firestore {
              data.created_at is timestamp &&
              (!('transcript' in data) || (data.transcript is string && data.transcript.size() < 10000)) &&
              (!('insight' in data) || (data.insight is string && data.insight.size() < 5000)) &&
+             (!('divine_oracle' in data) || (data.divine_oracle is string && data.divine_oracle.size() < 2000)) &&
              (!('tags' in data) || (data.tags is list && data.tags.size() < 20)) &&
              (!('duration' in data) || data.duration is number) &&
              (!('location' in data) || (data.location is string && data.location.size() < 100));

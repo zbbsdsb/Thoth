@@ -26,6 +26,7 @@
         "audio_url": { "type": "string" },
         "transcript": { "type": "string" },
         "insight": { "type": "string", "description": "AI generated subconscious analysis" },
+        "divine_oracle": { "type": "string", "description": "AI generated mystical oracle sentence" },
         "tags": { "type": "array", "items": { "type": "string" } },
         "created_at": { "type": "string", "format": "date-time" },
         "duration": { "type": "number" },

@@ -56,6 +56,7 @@ import {
   getDoc,
   setDoc,
   increment,
+  runTransaction,
   limit,
   Timestamp
 } from 'firebase/firestore';
@@ -114,6 +115,7 @@ interface Dream {
   audio_url?: string;
   tags: string[];
   insight: string;
+  divine_oracle: string;
   location: string;
   created_at: Timestamp;
 }
@@ -180,6 +182,8 @@ export default function App() {
   const [isTranscribing, setTranscribing] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isDreamLost, setIsDreamLost] = useState(false);
+  const [isWatchMode, setIsWatchMode] = useState(false);
+  const [hasWokenUp, setHasWokenUp] = useState(false);
   const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [activeTab, setActiveTab] = useState<'record' | 'history' | 'global' | 'settings'>('record');
@@ -188,7 +192,7 @@ export default function App() {
   const [entryMode, setEntryMode] = useState<'voice' | 'text'>('voice');
   const [userCountry, setUserCountry] = useState<string | null>(null);
   const [selectedDream, setSelectedDream] = useState<Dream | null>(null);
-  const [dreamToDelete, setDreamToDelete] = useState<{id: string, location: string} | null>(null);
+  const [dreamToDelete, setDreamToDelete] = useState<{id: string, location: string, tags: string[]} | null>(null);
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
@@ -196,10 +200,13 @@ export default function App() {
   // --- Loss Aversion: Memory Collapse Countdown ---
   useEffect(() => {
     if (activeTab === 'record' && !isRecording && !isTranscribing && countdown === null && !isDreamLost) {
+      // In Watch Mode, only start countdown after "waking up"
+      if (isWatchMode && !hasWokenUp) return;
+      
       // Start a 3-minute countdown (180 seconds) when entering record tab
       setCountdown(180);
     }
-  }, [activeTab, isRecording, isTranscribing, countdown, isDreamLost]);
+  }, [activeTab, isRecording, isTranscribing, countdown, isDreamLost, isWatchMode, hasWokenUp]);
 
   useEffect(() => {
     if (countdown !== null && countdown > 0) {
@@ -329,7 +336,11 @@ export default function App() {
     const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Analyze this dream transcript. Extract 3-5 key imagery tags (single words) and provide a short, poetic psychological insight (max 2 sentences). Return as JSON: { "tags": ["tag1", "tag2"], "insight": "..." }`,
+      contents: `Analyze this dream transcript. 
+      1. Extract 3-5 key imagery tags (single words).
+      2. Provide a short, poetic psychological insight (max 2 sentences).
+      3. Provide a mystical "divine oracle" sentence (similar to Tarot or ancient scripts, cryptic but profound).
+      Return as JSON: { "tags": ["tag1", "tag2"], "insight": "...", "divine_oracle": "..." }`,
       config: {
         responseMimeType: "application/json"
       }
@@ -338,7 +349,11 @@ export default function App() {
     try {
       return JSON.parse(response.text || "{}");
     } catch (e) {
-      return { tags: ["mystery", "subconscious"], insight: "The mind weaves patterns beyond immediate comprehension." };
+      return { 
+        tags: ["mystery", "subconscious"], 
+        insight: "The mind weaves patterns beyond immediate comprehension.",
+        divine_oracle: "The gate is open, yet you remain on the threshold."
+      };
     }
   };
 
@@ -423,10 +438,12 @@ export default function App() {
 
       let tags: string[] = [];
       let insight = "Subconscious patterns detected.";
+      let divine_oracle = "The silence speaks what the words cannot.";
       try {
         const analysis = await analyzeDream(transcript);
         tags = analysis.tags;
         insight = analysis.insight;
+        divine_oracle = analysis.divine_oracle || divine_oracle;
       } catch (err: any) {
         console.warn("AI Analysis skipped:", err.message);
       }
@@ -438,6 +455,7 @@ export default function App() {
         audio_url: audioUrl,
         tags,
         insight,
+        divine_oracle,
         location: userCountry || "Unknown",
         created_at: serverTimestamp(),
       }).catch(err => handleFirestoreError(err, OperationType.CREATE, dreamPath));
@@ -476,10 +494,12 @@ export default function App() {
     try {
       let tags: string[] = [];
       let insight = "Subconscious patterns detected.";
+      let divine_oracle = "The silence speaks what the words cannot.";
       try {
         const analysis = await analyzeDream(manualText);
         tags = analysis.tags;
         insight = analysis.insight;
+        divine_oracle = analysis.divine_oracle || divine_oracle;
       } catch (err: any) {
         console.warn("AI Analysis skipped:", err.message);
       }
@@ -490,6 +510,7 @@ export default function App() {
         transcript: manualText,
         tags,
         insight,
+        divine_oracle,
         location: userCountry || "Unknown",
         created_at: serverTimestamp(),
       }).catch(err => handleFirestoreError(err, OperationType.CREATE, dreamPath));
@@ -514,43 +535,49 @@ export default function App() {
     const userRef = doc(db, 'users', user.uid);
     const today = new Date().toISOString().split('T')[0];
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-    
-    let newStreak = profile.streak || 0;
-    if (profile.last_streak_date === yesterday) {
-      newStreak += 1;
-    } else if (profile.last_streak_date !== today) {
-      newStreak = 1;
-    }
-
-    const isNewDay = profile.last_usage_date !== today;
-    const userUpdate: any = {
-      total_dreams: increment(1),
-      streak: newStreak,
-      last_streak_date: today
-    };
-
-    if (isUsingPublicQuota) {
-      if (isNewDay) {
-        userUpdate.daily_usage_count = 1;
-        userUpdate.last_usage_date = today;
-      } else {
-        userUpdate.daily_usage_count = increment(1);
-      }
-    }
 
     try {
-      await updateDoc(userRef, userUpdate);
+      await runTransaction(db, async (transaction) => {
+        const userSnap = await transaction.get(userRef);
+        if (!userSnap.exists()) return;
+
+        const userData = userSnap.data() as UserProfile;
+        let newStreak = userData.streak || 0;
+        if (userData.last_streak_date === yesterday) {
+          newStreak += 1;
+        } else if (userData.last_streak_date !== today) {
+          newStreak = 1;
+        }
+
+        const isNewDay = userData.last_usage_date !== today;
+        const userUpdate: any = {
+          total_dreams: (userData.total_dreams || 0) + 1,
+          streak: newStreak,
+          last_streak_date: today
+        };
+
+        if (isUsingPublicQuota) {
+          if (isNewDay) {
+            userUpdate.daily_usage_count = 1;
+            userUpdate.last_usage_date = today;
+          } else {
+            userUpdate.daily_usage_count = (userData.daily_usage_count || 0) + 1;
+          }
+        }
+
+        transaction.update(userRef, userUpdate);
+      });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
     }
   };
 
-  const updateGlobalImagery = async (tags: string[]) => {
+  const updateGlobalImagery = async (tags: string[], delta: number = 1) => {
     for (const tag of tags) {
       const tagRef = doc(db, 'global_imagery', tag.toLowerCase());
       await setDoc(tagRef, {
         tag: tag.toLowerCase(),
-        count: increment(1),
+        count: increment(delta),
         last_updated: serverTimestamp()
       }, { merge: true }).catch(err => handleFirestoreError(err, OperationType.WRITE, `global_imagery/${tag.toLowerCase()}`));
     }
@@ -572,14 +599,14 @@ export default function App() {
     }
   };
 
-  const deleteDream = async (dreamId: string, location: string) => {
+  const deleteDream = async (dreamId: string, location: string, tags: string[]) => {
     if (!user) return;
-    setDreamToDelete({ id: dreamId, location });
+    setDreamToDelete({ id: dreamId, location, tags });
   };
 
   const confirmDeleteDream = async () => {
     if (!user || !dreamToDelete) return;
-    const { id: dreamId, location } = dreamToDelete;
+    const { id: dreamId, location, tags } = dreamToDelete;
     
     try {
       await deleteDoc(doc(db, 'dreams', dreamId)).catch(err => handleFirestoreError(err, OperationType.DELETE, `dreams/${dreamId}`));
@@ -587,6 +614,9 @@ export default function App() {
         total_dreams: increment(-1)
       }).catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`));
       await updateGlobalLocation(location || "Unknown", -1);
+      if (tags && tags.length > 0) {
+        await updateGlobalImagery(tags, -1);
+      }
       toast.success("Dream deleted successfully.");
     } catch (err) {
       if (err instanceof Error && err.message.includes('Firestore Error')) throw err;
@@ -715,8 +745,39 @@ export default function App() {
               initial="initial"
               animate="animate"
               exit="exit"
-              className="flex flex-col items-center justify-center min-h-[60vh] text-center"
+              className="flex flex-col items-center justify-center min-h-[60vh] text-center relative"
             >
+              {/* Watch Mode Simulation Overlay */}
+              {isWatchMode && !hasWokenUp && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-50 flex items-center justify-center bg-dream-bg/95 backdrop-blur-3xl rounded-[60px]"
+                >
+                  <div className="flex flex-col items-center gap-10 p-12">
+                    <div className="relative">
+                      <div className="absolute -inset-8 bg-dream-accent/20 rounded-full blur-3xl animate-pulse" />
+                      <div className="w-40 h-40 rounded-full border border-white/10 flex items-center justify-center relative bg-zinc-900/40">
+                        <Moon className="w-16 h-16 text-dream-accent/40" />
+                        <div className="absolute inset-0 rounded-full border-2 border-dream-accent/40 animate-[ping_3s_infinite]" />
+                      </div>
+                    </div>
+                    <div className="space-y-4">
+                      <h2 className="text-4xl font-serif italic text-white tracking-tight">Deep Sleep</h2>
+                      <p className="text-[10px] text-white/30 uppercase tracking-[0.4em] font-bold">Monitoring Subconscious Waves</p>
+                    </div>
+                    <button 
+                      onClick={() => setHasWokenUp(true)}
+                      className="group relative px-12 py-5 bg-white/5 border border-white/10 rounded-full overflow-hidden transition-all hover:border-dream-accent/50"
+                    >
+                      <div className="absolute inset-0 bg-dream-accent/10 translate-y-full group-hover:translate-y-0 transition-transform duration-500" />
+                      <span className="relative text-[10px] font-bold uppercase tracking-[0.5em] text-white/60 group-hover:text-white">Simulate Wake Up</span>
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
               <div className="mb-10 sm:mb-16 relative">
                 {/* Loss Aversion Mist Overlay */}
                 <AnimatePresence>
@@ -754,15 +815,46 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0 }}
-                      className="flex flex-col items-center gap-2 mb-8"
+                      className="flex flex-col items-center gap-3 mb-8"
                     >
-                      <div className="flex items-center gap-3 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-full">
-                        <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
-                        <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-red-500/80">
-                          Memory Collapse in {formatCountdown(countdown)}
-                        </span>
+                      <div className="relative group">
+                        {/* Watch Face Complication Style */}
+                        <div className="absolute -inset-4 bg-dream-accent/10 rounded-full blur-xl group-hover:bg-dream-accent/20 transition-all duration-1000" />
+                        <div className="relative flex items-center gap-4 px-6 py-3 bg-zinc-900/40 backdrop-blur-xl border border-white/5 rounded-full shadow-2xl">
+                          <div className="relative w-8 h-8 flex items-center justify-center">
+                            <svg className="w-full h-full -rotate-90">
+                              <circle
+                                cx="16"
+                                cy="16"
+                                r="14"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                className="text-white/5"
+                              />
+                              <motion.circle
+                                cx="16"
+                                cy="16"
+                                r="14"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeDasharray="88"
+                                animate={{ strokeDashoffset: 88 * (1 - countdown / 180) }}
+                                className="text-dream-accent"
+                              />
+                            </svg>
+                            <Clock className="absolute w-3 h-3 text-dream-accent/60" />
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/80">
+                              Collapse: {formatCountdown(countdown)}
+                            </span>
+                            <span className="text-[7px] uppercase tracking-[0.2em] text-white/20 font-bold">Signal Fading</span>
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-[9px] uppercase tracking-widest text-white/20">Capture now before the imagery fades forever</p>
+                      <p className="text-[9px] uppercase tracking-widest text-white/10 italic">The imagery is dissolving into the void</p>
                     </motion.div>
                   )}
                   {isDreamLost && (
@@ -971,7 +1063,7 @@ export default function App() {
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
-                          deleteDream(dream.id, dream.location);
+                          deleteDream(dream.id, dream.location, dream.tags);
                         }}
                         className="p-3 bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white rounded-xl transition-all"
                       >
@@ -1225,6 +1317,29 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="glass-card p-12">
+                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-10 flex items-center gap-4 text-white/60">
+                    <Moon className="w-5 h-5 text-dream-accent" />
+                    Watch Mode (Experimental)
+                  </h3>
+                  
+                  <div className="flex items-center justify-between p-8 bg-white/[0.03] border border-white/5 rounded-3xl">
+                    <div className="space-y-1">
+                      <p className="text-xs font-bold uppercase tracking-widest text-white">Enable Watch Interface</p>
+                      <p className="text-[10px] text-white/40 uppercase tracking-widest leading-relaxed">Optimize UI for circular displays and wake-up detection</p>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        setIsWatchMode(!isWatchMode);
+                        setHasWokenUp(false);
+                      }}
+                      className={`w-14 h-7 rounded-full transition-all relative ${isWatchMode ? 'bg-dream-accent' : 'bg-white/10'}`}
+                    >
+                      <div className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all shadow-lg ${isWatchMode ? 'left-8' : 'left-1'}`} />
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex gap-4">
                   <button 
                     onClick={() => signOut(auth)}
@@ -1350,7 +1465,18 @@ export default function App() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-12 pt-8 sm:pt-12 border-t border-white/5">
+                {selectedDream.divine_oracle && (
+                  <div className="py-8 sm:py-12 border-y border-white/5 flex flex-col items-center text-center space-y-6 relative overflow-hidden group">
+                    <div className="absolute inset-0 bg-dream-accent/5 opacity-0 group-hover:opacity-100 transition-opacity duration-1000" />
+                    <Sparkles className="w-8 h-8 text-dream-accent/40 animate-pulse" />
+                    <p className="text-xl sm:text-2xl md:text-3xl font-serif italic text-white tracking-tight max-w-2xl relative z-10">
+                      {selectedDream.divine_oracle}
+                    </p>
+                    <div className="text-[8px] uppercase tracking-[0.5em] text-dream-accent/40 font-bold">The Oracle has Spoken</div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-12 pt-8 sm:pt-12">
                   <div className="space-y-4 sm:space-y-6">
                     <h3 className="text-[9px] sm:text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Psychological Insight</h3>
                     <div className="p-6 sm:p-8 bg-dream-accent/5 border border-dream-accent/10 rounded-2xl sm:rounded-[32px]">
