@@ -10,12 +10,19 @@ Thoth offers a flexible usage model to ensure everyone can archive their dreams.
 
 ## Personal API Key
 
-If you'd like to remove the daily limit and have a dedicated, private usage quota, you can use your own Google AI Studio API key.
+If you'd like to remove the daily limit and have a dedicated, private usage quota, you can use your own API keys.
 
+### Google AI Studio Key
 1. **Get a Key**: Visit [Google AI Studio](https://aistudio.google.com/app/apikey) to generate a free or paid API key.
 2. **Configure**: Click the "Public Quota" button in the Thoth header.
 3. **Select Key**: Choose your personal API key from the list.
-4. **Unlimited Recording**: Once configured, you can record as many dreams as you like without daily limits.
+
+### Minimax API Key (Optional)
+For advanced synthesis or to bypass public limits, you can provide your own Minimax API key in the **Settings** tab. This allows for private, high-priority processing of your dream data.
+
+1. **Get a Key**: Visit the Minimax developer portal.
+2. **Configure**: Go to the **Profile** tab in Thoth.
+3. **Save**: Enter your key in the "Minimax API Key" field. It will be stored securely and used for your future recordings.
 
 ## Privacy & Data
 
