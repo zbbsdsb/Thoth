@@ -4,17 +4,21 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "tsx server.ts",
     "build": "vite build",
+    "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1023.0",
+    "@aws-sdk/s3-request-presigner": "^3.1023.0",
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "clsx": "^2.1.1",
+    "cors": "^2.8.6",
     "d3": "^7.9.0",
     "dotenv": "^17.2.3",
     "downloadjs": "^1.4.7",

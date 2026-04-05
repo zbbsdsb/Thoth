@@ -73,6 +73,7 @@ import { WorldMap } from './components/WorldMap';
 
 // --- Firebase Imports ---
 import { db, auth, storage } from './firebase';
+import { uploadToR2 } from './lib/r2';
 
 // --- Types ---
 enum OperationType {
@@ -241,10 +242,33 @@ export default function App() {
   useEffect(() => {
     const q = query(collection(db, 'global_locations'), orderBy('count', 'desc'));
     const unsubscribe = onSnapshot(q, (snap) => {
-      setGlobalLocations(snap.docs.map(d => d.data() as GlobalLocation));
+      const locs = snap.docs.map(d => d.data() as GlobalLocation);
+      console.log("Global locations updated:", locs);
+      setGlobalLocations(locs);
     });
     return () => unsubscribe();
   }, []);
+
+  // Sync global stats if they appear empty but dreams exist
+  useEffect(() => {
+    if (user && dreams.length > 0 && globalLocations.length === 0) {
+      console.log("Global stats seem empty, syncing...");
+      const counts: Record<string, number> = {};
+      dreams.forEach(d => {
+        const loc = d.location || "Unknown";
+        counts[loc] = (counts[loc] || 0) + 1;
+      });
+      
+      Object.entries(counts).forEach(([country, count]) => {
+        const locRef = doc(db, 'global_locations', country);
+        setDoc(locRef, {
+          country,
+          count,
+          last_updated: serverTimestamp()
+        }, { merge: true });
+      });
+    }
+  }, [user, dreams.length, globalLocations.length]);
 
   useEffect(() => {
     // Real-time count of all registered dreamers
@@ -310,7 +334,7 @@ export default function App() {
 
   const processDream = async (audioBlob: Blob, mimeType: string) => {
     if (!user || !profile) return;
-    
+    console.log("Processing dream...", { mimeType, size: audioBlob.size });
     const isUsingPublicQuota = !hasUserKey;
     const today = new Date().toISOString().split('T')[0];
     const isNewDay = profile.last_usage_date !== today;
@@ -324,9 +348,19 @@ export default function App() {
     setTranscribing(true);
     try {
       const dreamId = Math.random().toString(36).substring(7);
-      const storageRef = ref(storage, `dreams/${user.uid}/${dreamId}.webm`);
-      await uploadBytes(storageRef, audioBlob);
-      const audioUrl = await getDownloadURL(storageRef);
+      const fileName = `dreams/${user.uid}/${dreamId}.webm`;
+      let audioUrl = "";
+
+      try {
+        // Try R2 first
+        audioUrl = await uploadToR2(audioBlob, fileName, mimeType);
+        console.log("Uploaded to R2:", audioUrl);
+      } catch (r2Error) {
+        console.warn("R2 upload failed, falling back to Firebase Storage:", r2Error);
+        const storageRef = ref(storage, fileName);
+        await uploadBytes(storageRef, audioBlob);
+        audioUrl = await getDownloadURL(storageRef);
+      }
 
       const reader = new FileReader();
       reader.readAsDataURL(audioBlob);
@@ -468,13 +502,36 @@ export default function App() {
     }
   };
 
-  const updateGlobalLocation = async (country: string) => {
-    const locRef = doc(db, 'global_locations', country);
-    await setDoc(locRef, {
-      country,
-      count: increment(1),
-      last_updated: serverTimestamp()
-    }, { merge: true });
+  const updateGlobalLocation = async (country: string, delta: number = 1) => {
+    if (!country) country = "Unknown";
+    console.log(`Updating global location for ${country} with delta ${delta}`);
+    try {
+      const locRef = doc(db, 'global_locations', country);
+      await setDoc(locRef, {
+        country,
+        count: increment(delta),
+        last_updated: serverTimestamp()
+      }, { merge: true });
+    } catch (err) {
+      console.error("Failed to update global location:", err);
+    }
+  };
+
+  const deleteDream = async (dreamId: string, location: string) => {
+    if (!user) return;
+    if (!window.confirm("Are you sure you want to delete this dream? This action is irreversible.")) return;
+    
+    try {
+      await deleteDoc(doc(db, 'dreams', dreamId));
+      await updateDoc(doc(db, 'users', user.uid), {
+        total_dreams: increment(-1)
+      });
+      await updateGlobalLocation(location || "Unknown", -1);
+      toast.success("Dream deleted successfully.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to delete dream.");
+    }
   };
 
   // --- Filtered Data ---
@@ -495,17 +552,17 @@ export default function App() {
 
       {/* Header Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-50 bg-dream-bg/40 backdrop-blur-2xl border-b border-white/5">
-        <div className="max-w-7xl mx-auto px-6 h-24 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-20 sm:h-24 flex items-center justify-between">
           <motion.div 
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="flex items-center gap-4 group cursor-pointer" 
+            className="flex items-center gap-3 sm:gap-4 group cursor-pointer" 
             onClick={() => setActiveTab('record')}
           >
-            <ThothLogo className="w-12 h-12" />
+            <ThothLogo className="w-10 h-10 sm:w-12 h-12" />
             <div className="flex flex-col">
-              <span className="text-2xl font-serif italic font-light tracking-tight dream-text-gradient">Thoth</span>
-              <span className="text-[10px] uppercase tracking-[0.3em] text-white/30 font-bold">AI Dream Archive</span>
+              <span className="text-xl sm:text-2xl font-serif italic font-light tracking-tight dream-text-gradient">Thoth</span>
+              <span className="text-[8px] sm:text-[10px] uppercase tracking-[0.3em] text-white/30 font-bold">AI Dream Archive</span>
             </div>
           </motion.div>
 
@@ -535,9 +592,9 @@ export default function App() {
             ))}
           </div>
 
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3 sm:gap-6">
             {user ? (
-              <div className="flex items-center gap-4 pl-6 border-l border-white/10">
+              <div className="flex items-center gap-3 sm:gap-4 pl-4 sm:pl-6 border-l border-white/10">
                 <div className="text-right hidden sm:block">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-white/20">Dreamer</p>
                   <p className="text-sm font-medium text-white/80">{user.displayName?.split(' ')[0]}</p>
@@ -546,24 +603,47 @@ export default function App() {
                   whileHover={{ scale: 1.1 }}
                   src={user.photoURL || ""} 
                   alt="Avatar" 
-                  className="w-11 h-11 rounded-2xl border border-white/10 shadow-xl"
+                  className="w-9 h-9 sm:w-11 h-11 rounded-xl sm:rounded-2xl border border-white/10 shadow-xl"
                   referrerPolicy="no-referrer"
                 />
               </div>
             ) : (
               <button 
                 onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}
-                className="px-8 py-3 bg-white text-black text-xs font-bold uppercase tracking-[0.2em] rounded-2xl hover:bg-dream-accent hover:text-white transition-all duration-500 shadow-2xl shadow-white/5"
+                className="px-4 sm:px-8 py-2.5 sm:py-3 bg-white text-black text-[10px] sm:text-xs font-bold uppercase tracking-[0.2em] rounded-xl sm:rounded-2xl hover:bg-dream-accent hover:text-white transition-all duration-500 shadow-2xl shadow-white/5"
               >
-                Begin Journey
+                Begin
               </button>
             )}
           </div>
         </div>
       </nav>
 
+      {/* Mobile Bottom Navigation */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-dream-bg/80 backdrop-blur-3xl border-t border-white/5 px-6 py-4 pb-8">
+        <div className="flex items-center justify-between">
+          {[
+            { id: 'record', icon: Mic2, label: 'Capture' },
+            { id: 'history', icon: History, label: 'Archive' },
+            { id: 'global', icon: Globe, label: 'Collective' },
+            { id: 'settings', icon: Settings, label: 'Profile' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`flex flex-col items-center gap-1.5 transition-all ${
+                activeTab === tab.id ? 'text-dream-accent' : 'text-white/30'
+              }`}
+            >
+              <tab.icon className={`w-5 h-5 ${activeTab === tab.id ? 'scale-110' : ''}`} />
+              <span className="text-[8px] font-bold uppercase tracking-widest">{tab.label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+
       {/* Main Viewport */}
-      <main className="pt-40 pb-32 px-6 max-w-7xl mx-auto relative z-10">
+      <main className="pt-32 sm:pt-40 pb-32 sm:pb-32 px-4 sm:px-6 max-w-7xl mx-auto relative z-10">
         <AnimatePresence mode="wait">
           {activeTab === 'record' && (
             <motion.div 
@@ -574,27 +654,27 @@ export default function App() {
               exit="exit"
               className="flex flex-col items-center justify-center min-h-[60vh] text-center"
             >
-              <div className="mb-16">
+              <div className="mb-10 sm:mb-16">
                 <motion.h1 
                   initial={{ opacity: 0, y: 30 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.2 }}
-                  className="text-7xl md:text-[10rem] font-serif italic font-light tracking-tighter leading-none mb-8 dream-text-gradient"
+                  className="text-5xl sm:text-7xl md:text-[10rem] font-serif italic font-light tracking-tighter leading-[0.9] sm:leading-none mb-6 sm:mb-8 dream-text-gradient"
                 >
-                  Whisper to the <br />
+                  Whisper to the <br className="hidden sm:block" />
                   <span className="text-dream-accent">Subconscious</span>
                 </motion.h1>
                 <motion.p 
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ delay: 0.4 }}
-                  className="text-xl text-white/30 max-w-2xl mx-auto font-light leading-relaxed"
+                  className="text-base sm:text-xl text-white/30 max-w-2xl mx-auto font-light leading-relaxed px-4 sm:px-0"
                 >
                   Capture the ephemeral imagery of your sleep. Let the archive decode the patterns that emerge from the deep.
                 </motion.p>
               </div>
 
-              <div className="flex flex-col items-center gap-12">
+              <div className="flex flex-col items-center gap-8 sm:gap-12">
                 {entryMode === 'voice' ? (
                   <div className="relative">
                     <motion.button
@@ -602,16 +682,16 @@ export default function App() {
                       whileTap={{ scale: 0.95 }}
                       onClick={isRecording ? stopRecording : startRecording}
                       disabled={isTranscribing}
-                      className={`w-48 h-48 rounded-[60px] flex items-center justify-center relative z-10 transition-all duration-700 shadow-2xl ${
+                      className={`w-40 h-40 sm:w-48 sm:h-48 rounded-[50px] sm:rounded-[60px] flex items-center justify-center relative z-10 transition-all duration-700 shadow-2xl ${
                         isRecording 
                           ? 'bg-red-500 shadow-red-500/40 rotate-12' 
                           : 'bg-dream-accent shadow-dream-accent/40'
                       } ${isTranscribing ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}
                     >
                       {isRecording ? (
-                        <MicOff className="w-20 h-20 text-white animate-pulse" />
+                        <MicOff className="w-16 h-16 sm:w-20 sm:h-20 text-white animate-pulse" />
                       ) : (
-                        <Mic className="w-20 h-20 text-white" />
+                        <Mic className="w-16 h-16 sm:w-20 sm:h-20 text-white" />
                       )}
                     </motion.button>
                     
@@ -697,32 +777,32 @@ export default function App() {
               variants={fadeInUp}
               initial="initial"
               animate="animate"
-              className="space-y-16"
+              className="space-y-10 sm:space-y-16"
             >
-              <div className="flex flex-col md:flex-row md:items-end justify-between gap-10">
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 sm:gap-10">
                 <div>
-                  <h2 className="text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">The Archive</h2>
+                  <h2 className="text-5xl sm:text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">The Archive</h2>
                   <div className="flex items-center gap-4 mt-4">
-                    <span className="text-[10px] uppercase tracking-[0.3em] text-white/20 font-bold">Your personal subconscious library</span>
-                    <div className="h-px w-20 bg-white/10" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] text-dream-accent font-bold">{dreams.length} Dreams</span>
+                    <span className="text-[8px] sm:text-[10px] uppercase tracking-[0.3em] text-white/20 font-bold">Your personal subconscious library</span>
+                    <div className="hidden sm:block h-px w-20 bg-white/10" />
+                    <span className="text-[8px] sm:text-[10px] uppercase tracking-[0.3em] text-dream-accent font-bold">{dreams.length} Dreams</span>
                   </div>
                 </div>
                 <div className="relative w-full md:w-[400px]">
-                  <Search className="absolute left-6 top-1/2 -translate-y-1/2 w-5 h-5 text-white/20" />
+                  <Search className="absolute left-5 sm:left-6 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 h-5 text-white/20" />
                   <input 
                     type="text"
-                    placeholder="Search imagery or themes..."
+                    placeholder="Search imagery..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full glass-card bg-white/[0.03] border-white/5 rounded-2xl py-5 pl-16 pr-8 focus:border-dream-accent/50 outline-none transition-all text-sm font-medium"
+                    className="w-full glass-card bg-white/[0.03] border-white/5 rounded-xl sm:rounded-2xl py-4 sm:py-5 pl-14 sm:pl-16 pr-6 sm:pr-8 focus:border-dream-accent/50 outline-none transition-all text-sm font-medium"
                   />
                 </div>
               </div>
 
               <motion.div 
                 variants={staggerContainer}
-                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
+                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8"
               >
                 {filteredDreams.map((dream) => (
                   <motion.div 
@@ -730,15 +810,13 @@ export default function App() {
                     key={dream.id}
                     variants={fadeInUp}
                     onClick={() => setSelectedDream(dream)}
-                    className="group glass-card p-10 hover:bg-white/[0.07] transition-all duration-500 cursor-pointer relative overflow-hidden flex flex-col h-full"
+                    className="group glass-card p-8 sm:p-10 hover:bg-white/[0.07] transition-all duration-500 cursor-pointer relative overflow-hidden flex flex-col h-full"
                   >
                     <div className="absolute top-0 right-0 p-6 opacity-0 group-hover:opacity-100 transition-all duration-500 translate-y-2 group-hover:translate-y-0">
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (confirm("Permanently erase this memory?")) {
-                            deleteDoc(doc(db, 'dreams', dream.id));
-                          }
+                          deleteDream(dream.id, dream.location);
                         }}
                         className="p-3 bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white rounded-xl transition-all"
                       >
@@ -793,23 +871,23 @@ export default function App() {
               variants={fadeInUp}
               initial="initial"
               animate="animate"
-              className="grid grid-cols-1 lg:grid-cols-12 gap-12"
+              className="grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-12"
             >
-              <div className="lg:col-span-7 space-y-12">
+              <div className="lg:col-span-7 space-y-8 sm:space-y-12">
                 <div>
-                  <h2 className="text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">The Collective</h2>
-                  <p className="text-white/30 uppercase tracking-[0.3em] text-[10px] font-bold mt-4">Synthesized patterns from the global subconscious</p>
+                  <h2 className="text-5xl sm:text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">The Collective</h2>
+                  <p className="text-white/30 uppercase tracking-[0.3em] text-[8px] sm:text-[10px] font-bold mt-4">Synthesized patterns from the global subconscious</p>
                 </div>
 
-                <div className="glass-card p-12 relative overflow-hidden min-h-[500px] flex flex-col">
+                <div className="glass-card p-6 sm:p-12 relative overflow-hidden min-h-[400px] sm:min-h-[500px] flex flex-col">
                   <div className="absolute top-0 right-0 w-64 h-64 bg-dream-accent/5 blur-[100px] rounded-full -translate-y-1/2 translate-x-1/2" />
                   
-                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-12 flex items-center gap-4 text-white/60">
-                    <Globe className="w-5 h-5 text-dream-accent" />
+                  <h3 className="text-xs sm:text-sm font-bold uppercase tracking-[0.3em] mb-8 sm:mb-12 flex items-center gap-4 text-white/60">
+                    <Globe className="w-4 h-4 sm:w-5 h-5 text-dream-accent" />
                     Global Subconscious Pulse
                   </h3>
                   
-                  <div className="flex-1 w-full">
+                  <div className="flex-1 w-full min-h-[300px]">
                     <WorldMap data={globalLocations} />
                   </div>
                 </div>
@@ -923,21 +1001,21 @@ export default function App() {
               variants={fadeInUp}
               initial="initial"
               animate="animate"
-              className="max-w-3xl mx-auto space-y-16"
+              className="max-w-3xl mx-auto space-y-10 sm:space-y-16"
             >
               <div className="text-center">
-                <h2 className="text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">Interface</h2>
-                <p className="text-white/30 uppercase tracking-[0.3em] text-[10px] font-bold mt-4">Configure your subconscious connection</p>
+                <h2 className="text-5xl sm:text-7xl font-serif italic font-light tracking-tighter dream-text-gradient">Interface</h2>
+                <p className="text-white/30 uppercase tracking-[0.3em] text-[8px] sm:text-[10px] font-bold mt-4">Configure your subconscious connection</p>
               </div>
 
-              <div className="space-y-8">
-                <div className="glass-card p-12">
-                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-10 flex items-center gap-4 text-white/60">
-                    <User className="w-5 h-5 text-dream-accent" />
+              <div className="space-y-6 sm:space-y-8">
+                <div className="glass-card p-8 sm:p-12">
+                  <h3 className="text-xs sm:text-sm font-bold uppercase tracking-[0.3em] mb-8 sm:mb-10 flex items-center gap-4 text-white/60">
+                    <User className="w-4 h-4 sm:w-5 h-5 text-dream-accent" />
                     Dreamer Identity
                   </h3>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
                     <div className="bg-white/[0.03] border border-white/5 rounded-3xl p-6">
                       <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/20 mb-2">Total Archived</p>
                       <p className="text-3xl font-mono font-bold text-white/80">{profile?.total_dreams || 0}</p>
@@ -1008,7 +1086,7 @@ export default function App() {
       </main>
 
       {/* Persistent Footer Stats */}
-      <footer className="fixed bottom-0 left-0 right-0 z-40 bg-dream-bg/40 backdrop-blur-2xl border-t border-white/5 py-6">
+      <footer className="hidden sm:block fixed bottom-0 left-0 right-0 z-40 bg-dream-bg/40 backdrop-blur-2xl border-t border-white/5 py-6">
         <div className="max-w-7xl mx-auto px-8 flex items-center justify-between text-[9px] font-bold uppercase tracking-[0.3em] text-white/20">
           <div className="flex items-center gap-10">
             <div className="flex items-center gap-3">
@@ -1040,78 +1118,78 @@ export default function App() {
       {/* Dream Detail Modal */}
       <AnimatePresence>
         {selectedDream && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setSelectedDream(null)}
-              className="absolute inset-0 bg-dream-bg/90 backdrop-blur-xl"
+              className="absolute inset-0 bg-dream-bg/95 backdrop-blur-2xl"
             />
             <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-4xl glass-card p-12 overflow-y-auto max-h-[90vh]"
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full h-full sm:h-auto sm:max-w-4xl glass-card p-8 sm:p-12 overflow-y-auto sm:max-h-[90vh] rounded-none sm:rounded-[40px]"
             >
               <button 
                 onClick={() => setSelectedDream(null)}
-                className="absolute top-8 right-8 p-3 hover:bg-white/5 rounded-2xl transition-colors"
+                className="absolute top-6 sm:top-8 right-6 sm:right-8 p-3 hover:bg-white/5 rounded-2xl transition-colors z-10"
               >
                 <X className="w-6 h-6 text-white/20" />
               </button>
 
-              <div className="space-y-10">
-                <div className="flex items-center gap-4 text-xs font-bold uppercase tracking-[0.3em] text-dream-accent">
+              <div className="space-y-8 sm:space-y-10 pt-10 sm:pt-0">
+                <div className="flex items-center gap-4 text-[10px] sm:text-xs font-bold uppercase tracking-[0.3em] text-dream-accent">
                   <Calendar className="w-4 h-4" />
                   {selectedDream.created_at?.toDate().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
                 </div>
 
-                <div className="space-y-6">
-                  <h3 className="text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Transcript</h3>
-                  <p className="text-3xl md:text-4xl font-serif italic font-light leading-relaxed text-white/90">
+                <div className="space-y-4 sm:space-y-6">
+                  <h3 className="text-[9px] sm:text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Transcript</h3>
+                  <p className="text-2xl sm:text-3xl md:text-4xl font-serif italic font-light leading-relaxed text-white/90">
                     "{selectedDream.transcript}"
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-12 pt-12 border-t border-white/5">
-                  <div className="space-y-6">
-                    <h3 className="text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Psychological Insight</h3>
-                    <div className="p-8 bg-dream-accent/5 border border-dream-accent/10 rounded-[32px]">
-                      <p className="text-lg font-serif italic text-dream-accent/90 leading-relaxed">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-12 pt-8 sm:pt-12 border-t border-white/5">
+                  <div className="space-y-4 sm:space-y-6">
+                    <h3 className="text-[9px] sm:text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Psychological Insight</h3>
+                    <div className="p-6 sm:p-8 bg-dream-accent/5 border border-dream-accent/10 rounded-2xl sm:rounded-[32px]">
+                      <p className="text-base sm:text-lg font-serif italic text-dream-accent/90 leading-relaxed">
                         {selectedDream.insight}
                       </p>
                     </div>
                   </div>
-                  <div className="space-y-6">
-                    <h3 className="text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Imagery Tags</h3>
-                    <div className="flex flex-wrap gap-3">
+                  <div className="space-y-4 sm:space-y-6">
+                    <h3 className="text-[9px] sm:text-[10px] uppercase tracking-[0.4em] text-white/20 font-bold">Imagery Tags</h3>
+                    <div className="flex flex-wrap gap-2 sm:gap-3">
                       {selectedDream.tags.map(tag => (
-                        <span key={tag} className="px-6 py-3 bg-white/5 border border-white/5 rounded-2xl text-xs uppercase tracking-[0.2em] font-bold text-white/40">
+                        <span key={tag} className="px-4 sm:px-6 py-2 sm:py-3 bg-white/5 border border-white/5 rounded-xl sm:rounded-2xl text-[10px] sm:text-xs uppercase tracking-[0.2em] font-bold text-white/40">
                           #{tag}
                         </span>
                       ))}
                     </div>
-                    <div className="pt-8 flex items-center gap-6">
+                    <div className="pt-6 sm:pt-8 flex items-center gap-6">
                       <div className="flex flex-col">
-                        <span className="text-[9px] uppercase tracking-widest text-white/20 font-bold">Origin</span>
-                        <span className="text-sm font-medium text-white/60">{selectedDream.location}</span>
+                        <span className="text-[8px] sm:text-[9px] uppercase tracking-widest text-white/20 font-bold">Origin</span>
+                        <span className="text-xs sm:text-sm font-medium text-white/60">{selectedDream.location}</span>
                       </div>
                       <div className="h-8 w-px bg-white/5" />
                       <div className="flex flex-col">
-                        <span className="text-[9px] uppercase tracking-widest text-white/20 font-bold">Sync ID</span>
-                        <span className="text-sm font-mono text-white/40">{selectedDream.id}</span>
+                        <span className="text-[8px] sm:text-[9px] uppercase tracking-widest text-white/20 font-bold">Sync ID</span>
+                        <span className="text-xs sm:text-sm font-mono text-white/40 truncate max-w-[100px]">{selectedDream.id}</span>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex justify-end gap-4 pt-10">
-                  <button className="flex items-center gap-3 px-8 py-4 bg-white/5 border border-white/5 rounded-2xl text-[10px] uppercase tracking-[0.2em] font-bold text-white/40 hover:text-white transition-all">
+                <div className="flex flex-col sm:flex-row justify-end gap-3 sm:gap-4 pt-6 sm:pt-10 pb-10 sm:pb-0">
+                  <button className="w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 bg-white/5 border border-white/5 rounded-xl sm:rounded-2xl text-[10px] uppercase tracking-[0.2em] font-bold text-white/40 hover:text-white transition-all">
                     <Share2 className="w-4 h-4" />
                     Share Pattern
                   </button>
-                  <button className="flex items-center gap-3 px-8 py-4 bg-white/5 border border-white/5 rounded-2xl text-[10px] uppercase tracking-[0.2em] font-bold text-white/40 hover:text-white transition-all">
+                  <button className="w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 bg-white/5 border border-white/5 rounded-xl sm:rounded-2xl text-[10px] uppercase tracking-[0.2em] font-bold text-white/40 hover:text-white transition-all">
                     <Download className="w-4 h-4" />
                     Export Data
                   </button>
