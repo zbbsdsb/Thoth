@@ -329,32 +329,128 @@ export default function App() {
   }, []);
 
   // --- AI Service ---
-  const hasUserKey = profile?.external_apis?.minimax || false;
-  const apiKey = profile?.external_apis?.minimax || process.env.GEMINI_API_KEY;
+  const activeProvider = profile?.active_provider || 'gemini';
+  const providerKey = profile?.external_apis?.[activeProvider] || process.env.GEMINI_API_KEY;
+  const hasUserKey = !!profile?.external_apis?.[activeProvider];
+
+  const callAIProvider = async (prompt: string, apiKey: string, provider: string, isStreaming: boolean = false) => {
+    const base64ToText = (base64: string) => {
+      try {
+        return decodeURIComponent(escape(atob(base64)));
+      } catch {
+        return base64;
+      }
+    };
+
+    switch (provider) {
+      case 'openai': {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [{ role: 'user', content: prompt }],
+            response_format: { type: 'json_object' }
+          })
+        });
+        const data = await response.json();
+        return data.choices?.[0]?.message?.content || "{}";
+      }
+      
+      case 'deepseek': {
+        const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [{ role: 'user', content: prompt }]
+          })
+        });
+        const data = await response.json();
+        return data.choices?.[0]?.message?.content || "{}";
+      }
+      
+      case 'minimax': {
+        const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'abab6-chat',
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 2048
+          })
+        });
+        const data = await response.json();
+        return data.choices?.[0]?.message?.content || "{}";
+      }
+      
+      case 'gemini':
+      default: {
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: prompt,
+          config: { responseMimeType: "application/json" }
+        });
+        return response.text || "{}";
+      }
+    }
+  };
 
   const analyzeDream = async (text: string) => {
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Analyze this dream transcript. 
+    const prompt = `Analyze this dream transcript. 
       1. Extract 3-5 key imagery tags (single words).
       2. Provide a short, poetic psychological insight (max 2 sentences).
       3. Provide a mystical "divine oracle" sentence (similar to Tarot or ancient scripts, cryptic but profound).
-      Return as JSON: { "tags": ["tag1", "tag2"], "insight": "...", "divine_oracle": "..." }`,
-      config: {
-        responseMimeType: "application/json"
-      }
-    });
+      Return as JSON: { "tags": ["tag1", "tag2"], "insight": "...", "divine_oracle": "..." }
+
+      Dream transcript: ${text}`;
     
     try {
-      return JSON.parse(response.text || "{}");
+      const response = await callAIProvider(prompt, providerKey || '', activeProvider);
+      return JSON.parse(response);
     } catch (e) {
+      console.warn("AI Analysis failed, using fallback:", e);
       return { 
         tags: ["mystery", "subconscious"], 
         insight: "The mind weaves patterns beyond immediate comprehension.",
         divine_oracle: "The gate is open, yet you remain on the threshold."
       };
     }
+  };
+
+  const transcribeAudio = async (base64Audio: string, mimeType: string) => {
+    const audioData = `data:${mimeType};base64,${base64Audio}`;
+    
+    if (activeProvider === 'openai') {
+      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${providerKey}`
+        },
+        body: new FormData()
+      });
+      const formData = new FormData();
+      formData.append('file', audioData);
+      formData.append('model', 'whisper-1');
+      return (await response.json()).text || "No transcription available.";
+    }
+    
+    const ai = new GoogleGenAI({ apiKey: providerKey });
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: [{ parts: [{ text: "Transcribe this dream accurately." }, { inlineData: { mimeType, data: base64Audio } }] }]
+    });
+    return response.text || "No transcription available.";
   };
 
   // --- Recording Logic ---
@@ -429,12 +525,7 @@ export default function App() {
         reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
       });
 
-      const ai = new GoogleGenAI({ apiKey });
-      const transcriptionRes = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [{ parts: [{ text: "Transcribe this dream accurately." }, { inlineData: { mimeType, data: base64Audio } }] }]
-      });
-      const transcript = transcriptionRes.text || "No transcription available.";
+      const transcript = await transcribeAudio(base64Audio, mimeType);
 
       let tags: string[] = [];
       let insight = "Subconscious patterns detected.";
@@ -599,6 +690,117 @@ export default function App() {
     }
   };
 
+  const exportDreams = () => {
+    const exportData = {
+      exported_at: new Date().toISOString(),
+      dreamer_id: user?.uid,
+      total_dreams: dreams.length,
+      dreams: dreams.map(d => ({
+        id: d.id,
+        transcript: d.transcript,
+        tags: d.tags,
+        insight: d.insight,
+        divine_oracle: d.divine_oracle,
+        location: d.location,
+        created_at: d.created_at?.toDate().toISOString()
+      }))
+    };
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `thoth-archive-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    toast.success("Archive exported successfully.");
+  };
+
+  const exportDreamAsImage = async (dream: Dream) => {
+    try {
+      const dreamElement = document.createElement('div');
+      dreamElement.innerHTML = `
+        <div style="background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #16213e 100%); padding: 60px; font-family: serif, Georgia, serif; color: white; min-width: 800px;">
+          <div style="text-align: center; margin-bottom: 40px;">
+            <h1 style="font-size: 48px; font-style: italic; font-weight: 300; margin: 0; background: linear-gradient(90deg, #a855f7, #ec4899); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Thoth</h1>
+            <p style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: rgba(255,255,255,0.3); margin-top: 8px;">AI Dream Archive</p>
+          </div>
+          
+          <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 24px; padding: 40px; margin-bottom: 30px;">
+            <p style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.4em; color: rgba(255,255,255,0.2); margin-bottom: 16px;">Transcript</p>
+            <p style="font-size: 24px; font-style: italic; line-height: 1.8; color: rgba(255,255,255,0.9);">
+              "${dream.transcript}"
+            </p>
+          </div>
+
+          <div style="background: linear-gradient(135deg, rgba(168, 85, 247, 0.1) 0%, rgba(236, 72, 153, 0.1) 100%); border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 24px; padding: 40px; text-align: center; margin-bottom: 30px;">
+            <p style="font-size: 20px; font-style: italic; line-height: 1.8; color: #a855f7;">
+              ${dream.divine_oracle}
+            </p>
+            <p style="font-size: 8px; text-transform: uppercase; letter-spacing: 0.5em; color: rgba(168, 85, 247, 0.5); margin-top: 16px;">The Oracle has Spoken</p>
+          </div>
+
+          <div style="display: flex; gap: 20px; margin-bottom: 30px;">
+            <div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 20px; padding: 30px;">
+              <p style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.4em; color: rgba(255,255,255,0.2); margin-bottom: 12px;">Psychological Insight</p>
+              <p style="font-size: 14px; font-style: italic; line-height: 1.6; color: rgba(168, 85, 247, 0.8);">
+                ${dream.insight}
+              </p>
+            </div>
+            <div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 20px; padding: 30px;">
+              <p style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.4em; color: rgba(255,255,255,0.2); margin-bottom: 12px;">Imagery Tags</p>
+              <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                ${dream.tags.map(tag => `<span style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 8px 16px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em; color: rgba(255,255,255,0.5);">#${tag}</span>`).join('')}
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em; color: rgba(255,255,255,0.2);">
+            <span>Origin: ${dream.location}</span>
+            <span>${dream.created_at?.toDate().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</span>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(dreamElement);
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = 800;
+      canvas.height = 1200;
+      const ctx = canvas.getContext('2d');
+      
+      const img = new Image();
+      const svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1200">
+        <foreignObject width="100%" height="100%">
+          <div xmlns="http://www.w3.org/1999/xhtml">${dreamElement.innerHTML}</div>
+        </foreignObject>
+      </svg>`;
+      
+      const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+      
+      img.onload = () => {
+        ctx?.drawImage(img, 0, 0);
+        const pngUrl = canvas.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.href = pngUrl;
+        a.download = `dream-${dream.id}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        document.body.removeChild(dreamElement);
+        toast.success("Dream exported as image.");
+      };
+      img.src = url;
+    } catch (err) {
+      console.error("Export error:", err);
+      toast.error("Failed to export dream.");
+    }
+  };
+
   const deleteDream = async (dreamId: string, location: string, tags: string[]) => {
     if (!user) return;
     setDreamToDelete({ id: dreamId, location, tags });
@@ -659,12 +861,12 @@ export default function App() {
             </div>
           </motion.div>
 
-          <div className="hidden lg:flex items-center gap-10">
+          <div className="hidden lg:flex items-center gap-8">
             {[
-              { id: 'record', label: 'Capture', icon: Mic2 },
-              { id: 'history', label: 'Archive', icon: History },
-              { id: 'global', label: 'Collective', icon: Globe },
-              { id: 'settings', label: 'Settings', icon: Settings },
+              { id: 'record', label: 'Capture', icon: Mic2, tooltip: 'Record your dreams' },
+              { id: 'history', label: 'Archive', icon: History, tooltip: 'View your dream history' },
+              { id: 'global', label: 'Collective', icon: Globe, tooltip: 'Explore global dream patterns' },
+              { id: 'settings', label: 'Settings', icon: Settings, tooltip: 'Configure preferences' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -675,6 +877,13 @@ export default function App() {
               >
                 <tab.icon className={`w-4 h-4 transition-transform group-hover:scale-110 ${activeTab === tab.id ? 'text-dream-accent' : ''}`} />
                 {tab.label}
+                <motion.span 
+                  initial={{ opacity: 0, y: 5 }}
+                  whileHover={{ opacity: 1, y: 0 }}
+                  className="absolute -bottom-8 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-lg text-[8px] font-bold uppercase tracking-widest text-white/60 whitespace-nowrap pointer-events-none"
+                >
+                  {tab.tooltip}
+                </motion.span>
                 {activeTab === tab.id && (
                   <motion.div 
                     layoutId="nav-underline"
@@ -716,10 +925,10 @@ export default function App() {
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-dream-bg/80 backdrop-blur-3xl border-t border-white/5 px-6 py-4 pb-8">
         <div className="flex items-center justify-between">
           {[
-            { id: 'record', icon: Mic2, label: 'Capture' },
-            { id: 'history', icon: History, label: 'Archive' },
-            { id: 'global', icon: Globe, label: 'Collective' },
-            { id: 'settings', icon: Settings, label: 'Profile' },
+            { id: 'record', icon: Mic2, label: 'Record', tooltip: 'Capture your dream' },
+            { id: 'history', icon: History, label: 'Dreams', tooltip: 'Your archive' },
+            { id: 'global', icon: Globe, label: 'World', tooltip: 'Global dreams' },
+            { id: 'settings', icon: Settings, label: 'Settings', tooltip: 'Configure' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -727,6 +936,7 @@ export default function App() {
               className={`flex flex-col items-center gap-1.5 transition-all ${
                 activeTab === tab.id ? 'text-dream-accent' : 'text-white/30'
               }`}
+              title={tab.tooltip}
             >
               <tab.icon className={`w-5 h-5 ${activeTab === tab.id ? 'scale-110' : ''}`} />
               <span className="text-[8px] font-bold uppercase tracking-widest">{tab.label}</span>
@@ -1286,33 +1496,152 @@ export default function App() {
                   
                   <div className="space-y-8">
                     <div className="space-y-4">
-                      <div className="flex justify-between items-end">
-                        <label className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">Minimax API Key</label>
-                        <span className="text-[9px] text-white/20 italic">Optional: Removes public quota</span>
+                      <label className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">Default Provider</label>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {[
+                          { id: 'gemini', label: 'Gemini', color: 'bg-blue-500/20 text-blue-400 border-blue-500/20' },
+                          { id: 'openai', label: 'OpenAI', color: 'bg-green-500/20 text-green-400 border-green-500/20' },
+                          { id: 'deepseek', label: 'Deepseek', color: 'bg-purple-500/20 text-purple-400 border-purple-500/20' },
+                          { id: 'minimax', label: 'Minimax', color: 'bg-orange-500/20 text-orange-400 border-orange-500/20' },
+                        ].map((provider) => (
+                          <button
+                            key={provider.id}
+                            onClick={() => {
+                              if (!user) return;
+                              updateDoc(doc(db, 'users', user.uid), {
+                                active_provider: provider.id
+                              });
+                            }}
+                            className={`py-4 px-6 rounded-xl border transition-all text-[10px] font-bold uppercase tracking-[0.2em] ${
+                              profile?.active_provider === provider.id
+                                ? `${provider.color} border-current`
+                                : 'bg-white/5 text-white/40 border-white/5 hover:border-white/10'
+                            }`}
+                          >
+                            {provider.label}
+                          </button>
+                        ))}
                       </div>
-                      <input 
-                        type="password"
-                        placeholder="Enter your private key..."
-                        value={profile?.external_apis?.minimax || ""}
-                        onChange={(e) => {
-                          if (!user) return;
-                          updateDoc(doc(db, 'users', user.uid), {
-                            'external_apis.minimax': e.target.value
-                          });
-                        }}
-                        className="w-full bg-white/[0.03] border border-white/5 rounded-2xl py-5 px-6 focus:border-dream-accent/50 outline-none transition-all font-mono text-sm"
-                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">Gemini API Key</label>
+                        <input 
+                          type="password"
+                          placeholder="AIzaSy..."
+                          value={profile?.external_apis?.gemini || ""}
+                          onChange={(e) => {
+                            if (!user) return;
+                            updateDoc(doc(db, 'users', user.uid), {
+                              'external_apis.gemini': e.target.value
+                            });
+                          }}
+                          className="w-full bg-white/[0.03] border border-white/5 rounded-xl py-4 px-5 focus:border-blue-500/50 outline-none transition-all font-mono text-xs"
+                        />
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">OpenAI API Key</label>
+                        <input 
+                          type="password"
+                          placeholder="sk-..."
+                          value={profile?.external_apis?.openai || ""}
+                          onChange={(e) => {
+                            if (!user) return;
+                            updateDoc(doc(db, 'users', user.uid), {
+                              'external_apis.openai': e.target.value
+                            });
+                          }}
+                          className="w-full bg-white/[0.03] border border-white/5 rounded-xl py-4 px-5 focus:border-green-500/50 outline-none transition-all font-mono text-xs"
+                        />
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">Deepseek API Key</label>
+                        <input 
+                          type="password"
+                          placeholder="sk-..."
+                          value={profile?.external_apis?.deepseek || ""}
+                          onChange={(e) => {
+                            if (!user) return;
+                            updateDoc(doc(db, 'users', user.uid), {
+                              'external_apis.deepseek': e.target.value
+                            });
+                          }}
+                          className="w-full bg-white/[0.03] border border-white/5 rounded-xl py-4 px-5 focus:border-purple-500/50 outline-none transition-all font-mono text-xs"
+                        />
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">Minimax API Key</label>
+                        <input 
+                          type="password"
+                          placeholder="eyJhbGciOiJ..."
+                          value={profile?.external_apis?.minimax || ""}
+                          onChange={(e) => {
+                            if (!user) return;
+                            updateDoc(doc(db, 'users', user.uid), {
+                              'external_apis.minimax': e.target.value
+                            });
+                          }}
+                          className="w-full bg-white/[0.03] border border-white/5 rounded-xl py-4 px-5 focus:border-orange-500/50 outline-none transition-all font-mono text-xs"
+                        />
+                      </div>
                     </div>
 
                     <div className="p-6 bg-dream-accent/5 border border-dream-accent/10 rounded-2xl flex items-start gap-4">
                       <Zap className="w-5 h-5 text-dream-accent mt-1" />
                       <div className="space-y-1">
-                        <p className="text-xs font-bold uppercase tracking-widest text-dream-accent">Public Quota Active</p>
+                        <p className="text-xs font-bold uppercase tracking-widest text-dream-accent">
+                          {profile?.external_apis?.[profile?.active_provider || 'gemini'] ? 'Private API Active' : 'Public Quota Active'}
+                        </p>
                         <p className="text-[10px] leading-relaxed text-white/40 uppercase tracking-widest">
-                          You are currently using the public Gemini 3.1 Flash quota. 
-                          Remaining today: <span className="text-white">{(profile?.daily_quota_limit || 3) - (profile?.daily_usage_count || 0)}</span> dreams.
+                          {profile?.external_apis?.[profile?.active_provider || 'gemini'] 
+                            ? 'Your personal API key is being used for analysis.'
+                            : `You are currently using the public ${profile?.active_provider || 'Gemini'} quota. Remaining today: ${(profile?.daily_quota_limit || 3) - (profile?.daily_usage_count || 0)} dreams.`
+                          }
                         </p>
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="glass-card p-12">
+                  <h3 className="text-sm font-bold uppercase tracking-[0.3em] mb-10 flex items-center gap-4 text-white/60">
+                    <Download className="w-5 h-5 text-dream-accent" />
+                    Export Archive
+                  </h3>
+                  
+                  <div className="space-y-6">
+                    <div className="p-6 bg-white/[0.03] border border-white/5 rounded-2xl flex items-center justify-between">
+                      <div className="space-y-2">
+                        <p className="text-xs font-bold uppercase tracking-widest text-white">Export All Dreams</p>
+                        <p className="text-[10px] text-white/40 uppercase tracking-widest leading-relaxed">Download your complete dream archive as JSON</p>
+                      </div>
+                      <button 
+                        onClick={exportDreams}
+                        className="flex items-center gap-3 px-6 py-3 bg-white/5 border border-white/10 rounded-xl text-[10px] font-bold uppercase tracking-[0.2em] text-white/60 hover:text-white hover:bg-white/10 transition-all"
+                      >
+                        <Download className="w-4 h-4" />
+                        JSON
+                      </button>
+                    </div>
+                    
+                    <div className="p-6 bg-white/[0.03] border border-white/5 rounded-2xl flex items-center justify-between">
+                      <div className="space-y-2">
+                        <p className="text-xs font-bold uppercase tracking-widest text-white">Export as Image</p>
+                        <p className="text-[10px] text-white/40 uppercase tracking-widest leading-relaxed">Generate high-quality visual representations</p>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          if (dreams.length > 0) {
+                            exportDreamAsImage(dreams[0]);
+                          }
+                        }}
+                        disabled={dreams.length === 0}
+                        className="flex items-center gap-3 px-6 py-3 bg-white/5 border border-white/10 rounded-xl text-[10px] font-bold uppercase tracking-[0.2em] text-white/60 hover:text-white hover:bg-white/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <BarChart3 className="w-4 h-4" />
+                        PNG
+                      </button>
                     </div>
                   </div>
                 </div>
