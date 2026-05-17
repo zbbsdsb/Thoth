@@ -1,7 +1,4 @@
-
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
@@ -14,6 +11,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!process.env.R2_BUCKET_NAME) {
       return res.status(500).json({ error: "R2_BUCKET_NAME not configured" });
     }
+
+    const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
+    const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
 
     const r2Client = new S3Client({
       region: "auto",
