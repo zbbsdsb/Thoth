@@ -35,7 +35,7 @@ import {
   MoreVertical
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenerativeAI, GenerateContentResponse } from "@google/generative-ai";
 import { 
   signInWithPopup, 
   GoogleAuthProvider, 
@@ -395,7 +395,7 @@ export default function App() {
       
       case 'gemini':
       default: {
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = new GoogleGenerativeAI({ apiKey });
         const response = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
           contents: prompt,
@@ -445,7 +445,7 @@ export default function App() {
       return (await response.json()).text || "No transcription available.";
     }
     
-    const ai = new GoogleGenAI({ apiKey: providerKey });
+    const ai = new GoogleGenerativeAI({ apiKey: providerKey });
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: [{ parts: [{ text: "Transcribe this dream accurately." }, { inlineData: { mimeType, data: base64Audio } }] }]
